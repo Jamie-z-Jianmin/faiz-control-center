@@ -64,10 +64,10 @@ flowchart LR
 #### One-line installer (macOS & Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Jamie-z-Jianmin/faiz-control-center/main/docs/site/install.sh | bash
+curl -fsSL https://faiz-control-center.pages.dev/install.sh | bash
 ```
 
-*(Once your Cloudflare Pages mirror is bound to `docs/site`, replace the URL with `https://<your-cf-domain>/install.sh` for edge-accelerated delivery.)*
+*(Cloudflare Pages edge-accelerated mirror; GitHub raw fallback: `https://raw.githubusercontent.com/Jamie-z-Jianmin/faiz-control-center/main/docs/site/install.sh`)*
 
 #### Manual / Developer install
 

@@ -64,10 +64,10 @@ flowchart LR
 #### 一行命令自动安装（macOS & Linux）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Jamie-z-Jianmin/faiz-control-center/main/docs/site/install.sh | bash
+curl -fsSL https://faiz-control-center.pages.dev/install.sh | bash
 ```
 
-*（绑定 Cloudflare Pages 到 `docs/site` 后，可直接使用 `https://<你的CF域名>/install.sh` 走边缘节点加速安装。）*
+*（Cloudflare Pages 全球边缘节点加速；GitHub 备用源：`https://raw.githubusercontent.com/Jamie-z-Jianmin/faiz-control-center/main/docs/site/install.sh`）*
 
 #### 手动 / 开发模式安装
 

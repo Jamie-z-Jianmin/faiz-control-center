@@ -1,10 +1,12 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Fast (<75ms) TrueColor statusLine renderer for Antigravity CLI (`agy`).
 # Design incorporates Lumidarin/agy-capsule visual hierarchy & live telemetry:
 #   - Styles: capsule (subtle dark glass pill) | powerline (Material 800 solid) | pill (accent bar) | minimal (plain)
 #   - Indicators: ring (○◔◑◕●) | bar (6-cell ■□)
 #   - Color modes: row (uniform accent/color per row) | semantic (status/threshold colored)
 #   - Live telemetry from active transcript.jsonl tail (<2ms): Prompt Cache hit + 3m/4m TTL + live Token speed (t/s)
+
+[ "${FAIZ_STATUSLINE_SILENT:-0}" = "1" ] && exit 0
 
 CACHE_DIR="$HOME/.agents/cache"
 USAGE_CACHE="$CACHE_DIR/usage_snapshot.json"
@@ -99,7 +101,7 @@ if [ -z "$t_path" ] && [ -z "${FAIZ_TRANSCRIPT_PATH+x}" ]; then
             [ -s "$t_cand" ] && t_path="$t_cand"
         fi
     fi
-    if [ -z "$t_path" ]; then
+    if [ -z "$t_path" ] && [ -d "$HOME/.gemini/antigravity-cli/brain" ]; then
         t_latest=$(ls -1t "$HOME"/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null | head -n 1 || true)
         [ -n "$t_latest" ] && [ -s "$t_latest" ] && t_path="$t_latest"
     fi
@@ -237,7 +239,14 @@ case "$cfg_raw" in
 esac
 jq_args+=(--argjson p_tbl "$p_tbl")
 
-JQ_FILTER='
+case "$cfg_raw" in
+    *'"zh"'*)
+        JQ_DISP_LEN='def disp_len: if (test("[\u2e80-\u9fff\uac00-\ud7af\uf900-\uffff]") | not) then length else explode | reduce .[] as $cp (0; . + (if ($cp >= 11904 and $cp <= 40959) or ($cp >= 4352 and $cp <= 4447) or ($cp >= 44032 and $cp <= 55203) or ($cp >= 63744 and $cp <= 65500) then 2 else 1 end)) end;' ;;
+    *)
+        JQ_DISP_LEN='def disp_len: length;' ;;
+esac
+
+JQ_FILTER="${JQ_DISP_LEN}"'
   def ansi16($name):
     ({
       "cyan": "\u001b[36m", "green": "\u001b[32m", "yellow": "\u001b[33m",
@@ -294,16 +303,6 @@ JQ_FILTER='
     elif $pct >= 38 then "◑"
     elif $pct >= 13 then "◔"
     else "○" end;
-  def disp_len:
-    gsub("\u001b\\[[0-9;]*m"; "")
-    | if (test("[\u2e80-\u9fff\uac00-\ud7af\uf900-\uffff]") | not) then
-        length
-      else
-        explode
-        | reduce .[] as $cp (0;
-            . + (if ($cp >= 11904 and $cp <= 40959) or ($cp >= 4352 and $cp <= 4447) or ($cp >= 44032 and $cp <= 55203) or ($cp >= 63744 and $cp <= 65500) then 2 else 1 end)
-          )
-      end;
 
   def row_token_to_slot($tok):
     ({

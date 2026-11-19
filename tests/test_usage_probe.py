@@ -100,6 +100,24 @@ class TestUsageProbe(unittest.TestCase):
         self.assertAlmostEqual(gem["five_hour_pct"], 21.36)
         self.assertEqual(gem["five_hour_refresh"], "Refreshes in 2h 30m")
 
+    def test_parse_usage_text_applies_csi_cursor_diff_repaint(self) -> None:
+        # Simulate agy's incremental CSI cursor-positioned RPC update after Frame 1,
+        # including updating digits before an existing '%' without re-emitting '%' or headers.
+        diff_update = (
+            "\x1b[8;54H20.37"
+            "\n\x1b[1G\x1b[KRefreshes in 145h 44m"
+            "\x1b[12;54H8.23% "
+            "\x1b[13;1H\x1b[KRefreshes in 3h 14m"
+        )
+        parsed = parse_usage_text(SAMPLE_USAGE_OUTPUT + diff_update)
+        buckets = {b["group_name"]: b for b in parsed["buckets"]}
+        gem = buckets["GEMINI MODELS"]
+        self.assertAlmostEqual(gem["weekly_pct"], 20.37)
+        self.assertEqual(gem["weekly_refresh"], "Refreshes in 145h 44m")
+        self.assertAlmostEqual(gem["five_hour_pct"], 8.23)
+        self.assertEqual(gem["five_hour_refresh"], "Refreshes in 3h 14m")
+        self.assertAlmostEqual(buckets["GEMINI 4 ARGON"]["weekly_pct"], 13.78)
+
     def test_parse_ps_eww_channels(self) -> None:
         ps_text = "\n".join(
             [

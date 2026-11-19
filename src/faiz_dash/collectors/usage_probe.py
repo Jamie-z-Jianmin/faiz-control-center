@@ -18,6 +18,7 @@ import subprocess
 import termios
 import time
 from typing import Any, Optional
+import unicodedata
 
 from ..gateways.exec_util import resolve_binary, run_exec
 from ..models import (
@@ -36,7 +37,7 @@ DEFAULT_CLI_LOG = Path.home() / ".gemini" / "antigravity-cli" / "cli.log"
 _ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _ANSI_OSC_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _ANSI_ESC_RE = re.compile(r"\x1b[@-Z\\-_]")
-_ACCOUNT_RE = re.compile(r"Account:\s*([^\s\r\n]+)")
+_ACCOUNT_RE = re.compile(r"Account:\s*([A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+|[^\s\r\n%]+)")
 _MODELS_RE = re.compile(r"Models within this group:\s*([^\r\n]+)")
 _PCT_RE = re.compile(r"(\d+(?:\.\d+)?)%")
 _REFRESH_RE = re.compile(r"(Refreshes in [^\r\n]+|Quota available)")
@@ -59,6 +60,169 @@ def strip_ansi(raw_text: str) -> str:
     return text.replace("\r", "")
 
 
+def render_pty_screen(raw_text: str, *, rows: int = 60, cols: int = 140) -> str:
+    """Replay VT/CSI cursor positioning and erases onto a rows x cols screen grid."""
+    grid = [[" "] * cols for _ in range(rows)]
+    r = 0
+    c = 0
+    wrap_pending = False
+    saved = (0, 0)
+    i = 0
+    n = len(raw_text)
+
+    def _scroll_if_needed() -> None:
+        nonlocal r
+        while r >= rows:
+            grid.pop(0)
+            grid.append([" "] * cols)
+            r -= 1
+
+    while i < n:
+        ch = raw_text[i]
+        if ch == "\x1b":
+            if i + 1 < n and raw_text[i + 1] == "[":
+                j = i + 2
+                while j < n and not ("@" <= raw_text[j] <= "~"):
+                    j += 1
+                if j < n:
+                    params = raw_text[i + 2 : j]
+                    final = raw_text[j]
+                    i = j + 1
+                    priv = params.startswith("?")
+                    p_str = params[1:] if priv else params
+                    nums = [int(x) if x.isdigit() else 0 for x in p_str.split(";")] if p_str else []
+                    if priv:
+                        if final in ("h", "l") and any(x in (47, 1047, 1049) for x in nums):
+                            grid = [[" "] * cols for _ in range(rows)]
+                            r, c, wrap_pending = 0, 0, False
+                        continue
+                    if final in ("H", "f"):
+                        rr = (nums[0] if len(nums) >= 1 and nums[0] > 0 else 1) - 1
+                        cc = (nums[1] if len(nums) >= 2 and nums[1] > 0 else 1) - 1
+                        r = max(0, min(rows - 1, rr))
+                        c = max(0, min(cols - 1, cc))
+                        wrap_pending = False
+                    elif final == "G":
+                        cc = (nums[0] if nums and nums[0] > 0 else 1) - 1
+                        c = max(0, min(cols - 1, cc))
+                        wrap_pending = False
+                    elif final == "A":
+                        r = max(0, r - (nums[0] if nums and nums[0] > 0 else 1))
+                        wrap_pending = False
+                    elif final == "B":
+                        r = min(rows - 1, r + (nums[0] if nums and nums[0] > 0 else 1))
+                        wrap_pending = False
+                    elif final == "C":
+                        c = min(cols - 1, c + (nums[0] if nums and nums[0] > 0 else 1))
+                        wrap_pending = False
+                    elif final == "D":
+                        c = max(0, c - (nums[0] if nums and nums[0] > 0 else 1))
+                        wrap_pending = False
+                    elif final == "E":
+                        r = min(rows - 1, r + (nums[0] if nums and nums[0] > 0 else 1))
+                        c = 0
+                        wrap_pending = False
+                    elif final == "F":
+                        r = max(0, r - (nums[0] if nums and nums[0] > 0 else 1))
+                        c = 0
+                        wrap_pending = False
+                    elif final == "J":
+                        mode = nums[0] if nums else 0
+                        if mode in (2, 3):
+                            grid = [[" "] * cols for _ in range(rows)]
+                        elif mode == 0:
+                            for cc in range(c, cols):
+                                grid[r][cc] = " "
+                            for rr in range(r + 1, rows):
+                                grid[rr] = [" "] * cols
+                        elif mode == 1:
+                            for rr in range(0, r):
+                                grid[rr] = [" "] * cols
+                            for cc in range(0, c + 1):
+                                grid[r][cc] = " "
+                        wrap_pending = False
+                    elif final == "K":
+                        mode = nums[0] if nums else 0
+                        if mode == 0:
+                            for cc in range(c, cols):
+                                grid[r][cc] = " "
+                        elif mode == 1:
+                            for cc in range(0, c + 1):
+                                grid[r][cc] = " "
+                        elif mode == 2:
+                            grid[r] = [" "] * cols
+                        wrap_pending = False
+                    elif final == "s":
+                        saved = (r, c)
+                    elif final == "u":
+                        r, c = saved
+                        wrap_pending = False
+                    continue
+            elif i + 1 < n and raw_text[i + 1] == "]":
+                j = i + 2
+                while j < n:
+                    if raw_text[j] == "\x07":
+                        j += 1
+                        break
+                    if raw_text[j] == "\x1b" and j + 1 < n and raw_text[j + 1] == "\\":
+                        j += 2
+                        break
+                    j += 1
+                i = j
+                continue
+            else:
+                if i + 1 < n and raw_text[i + 1] == "7":
+                    saved = (r, c)
+                elif i + 1 < n and raw_text[i + 1] == "8":
+                    r, c = saved
+                    wrap_pending = False
+                i += 2
+                continue
+
+        if ch == "\r":
+            c = 0
+            wrap_pending = False
+            i += 1
+            continue
+        if ch == "\n":
+            r += 1
+            c = 0
+            wrap_pending = False
+            _scroll_if_needed()
+            i += 1
+            continue
+        if ch == "\b":
+            c = max(0, c - 1)
+            wrap_pending = False
+            i += 1
+            continue
+        if ch == "\t":
+            c = min(cols - 1, (c // 8 + 1) * 8)
+            wrap_pending = False
+            i += 1
+            continue
+        if ord(ch) < 32 or unicodedata.combining(ch):
+            i += 1
+            continue
+
+        w = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if wrap_pending or c + w > cols:
+            r += 1
+            c = 0
+            wrap_pending = False
+            _scroll_if_needed()
+        grid[r][c] = ch
+        if w == 2 and c + 1 < cols:
+            grid[r][c + 1] = ""
+        c += w
+        if c >= cols:
+            c = cols - 1
+            wrap_pending = True
+        i += 1
+
+    return "\n".join("".join(row).rstrip() for row in grid).rstrip()
+
+
 def _parse_limit_block(section_text: str, heading_pattern: str) -> tuple[Optional[float], str]:
     match = re.search(heading_pattern, section_text)
     if not match:
@@ -73,7 +237,7 @@ def _parse_limit_block(section_text: str, heading_pattern: str) -> tuple[Optiona
 
 def parse_usage_text(raw_text: str) -> dict[str, Any]:
     """Parse captured Antigravity `/usage` TUI text into structured quota buckets."""
-    clean = strip_ansi(raw_text)
+    clean = render_pty_screen(raw_text)
     acc_match = _ACCOUNT_RE.search(clean)
     account = acc_match.group(1).strip() if acc_match else ""
 
@@ -148,10 +312,10 @@ def run_pty_usage_probe(
     lock_path: Optional[Path] = None,
     agy_bin: str = DEFAULT_AGY_BIN,
     cooldown_sec: float = 35.0,
-    timeout_sec: float = 12.0,
+    timeout_sec: float = 14.0,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Run `/usage` inside an isolated 60x140 PTY with flock and 12s process-group reaping."""
+    """Run `/usage` inside an isolated 60x140 PTY with flock and process-group reaping."""
     cache_file = cache_path or (DEFAULT_CACHE_DIR / "usage_snapshot.json")
     lock_file = lock_path or (DEFAULT_CACHE_DIR / "usage_probe.lock")
     lock_file.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +346,7 @@ def run_pty_usage_probe(
 
         env = os.environ.copy()
         env["FAIZ_NO_DASH"] = "1"
+        env["FAIZ_STATUSLINE_SILENT"] = "1"
         env.pop("AGY_ADC_AUTH", None)
         env["TERM"] = "xterm-256color"
 
@@ -189,6 +354,10 @@ def run_pty_usage_probe(
         buf = bytearray()
         sent = False
         start = time.monotonic()
+        frame1_seen_at: Optional[float] = None
+        last_chunk_at = start
+        post_frame1_bytes = 0
+        saw_post_frame1_repaint = False
 
         try:
             proc = subprocess.Popen(
@@ -205,6 +374,7 @@ def run_pty_usage_probe(
 
             while time.monotonic() - start < timeout_sec:
                 readable, _, _ = select.select([master_fd], [], [], 0.15)
+                chunk = b""
                 if readable:
                     try:
                         chunk = os.read(master_fd, 8192)
@@ -214,7 +384,8 @@ def run_pty_usage_probe(
                     except OSError:
                         break
 
-                elapsed = time.monotonic() - start
+                now = time.monotonic()
+                elapsed = now - start
                 if not sent and (b"Google AI Pro" in buf or b"for shortcuts" in buf) and elapsed > 1.2:
                     time.sleep(0.25)
                     os.write(master_fd, b"/usage")
@@ -227,27 +398,30 @@ def run_pty_usage_probe(
                     os.write(master_fd, b"\r")
                     sent = True
 
-                if sent and b"GEMINI 4 ARGON" in buf:
-                    argon_tail = buf[buf.rfind(b"GEMINI 4 ARGON") :]
-                    if b"%" in argon_tail and (b"Refreshes in" in argon_tail or b"Quota available" in argon_tail):
-                        # Wait briefly (~0.65s quiet window, max 1.4s) so force-refreshed RPC repaints settle.
-                        settle_deadline = min(start + timeout_sec, time.monotonic() + 1.4)
-                        quiet_since = time.monotonic()
-                        while time.monotonic() < settle_deadline:
-                            wait_left = min(0.12, settle_deadline - time.monotonic())
-                            if wait_left <= 0:
-                                break
-                            if select.select([master_fd], [], [], wait_left)[0]:
-                                try:
-                                    extra = os.read(master_fd, 8192)
-                                    if not extra:
-                                        break
-                                    buf.extend(extra)
-                                    quiet_since = time.monotonic()
-                                except OSError:
-                                    break
-                            elif time.monotonic() - quiet_since >= 0.65:
-                                break
+                if frame1_seen_at is None:
+                    if sent and b"GEMINI 4 ARGON" in buf:
+                        argon_tail = buf[buf.rfind(b"GEMINI 4 ARGON") :]
+                        if b"%" in argon_tail and (b"Refreshes in" in argon_tail or b"Quota available" in argon_tail):
+                            frame1_seen_at = now
+                            last_chunk_at = now
+                else:
+                    if chunk:
+                        since_f1 = now - frame1_seen_at
+                        gap = now - last_chunk_at
+                        last_chunk_at = now
+                        if since_f1 >= 0.45:
+                            post_frame1_bytes += len(chunk)
+                            if (
+                                b"%" in chunk
+                                or b"Refreshes in" in chunk
+                                or b"Quota available" in chunk
+                                or (gap >= 0.5 and post_frame1_bytes >= 80)
+                            ):
+                                saw_post_frame1_repaint = True
+                    settle_cap = min(start + timeout_sec, frame1_seen_at + 4.8)
+                    if now >= settle_cap:
+                        break
+                    if saw_post_frame1_repaint and (now - last_chunk_at) >= 0.85:
                         break
         finally:
             if proc is not None:
