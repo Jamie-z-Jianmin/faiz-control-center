@@ -1,0 +1,47 @@
+Screen {
+    layout: vertical;
+    background: #0d1117;
+    color: #e6edf3;
+}
+
+#top-bar {
+    height: 1;
+    background: #161b22;
+    color: #e6edf3;
+    padding: 0 1;
+}
+
+#bottom-bar {
+    height: 1;
+    background: #161b22;
+    color: #8b949e;
+    padding: 0 1;
+}
+
+#panels-container {
+    height: 1fr;
+    width: 100%;
+}
+
+#panels-container.preset-horizontal {
+    layout: horizontal;
+}
+
+#panels-container.preset-vertical {
+    layout: vertical;
+}
+
+.dash-panel {
+    border: round #30363d;
+    border-title-color: #79c0ff;
+    border-title-style: bold;
+    background: #0d1117;
+    padding: 0 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.dash-panel:focus {
+    border: round #58a6ff;
+    border-title-color: #ffa657;
+}

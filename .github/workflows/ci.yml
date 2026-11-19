@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install jq (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Install package & verify styles.tcss inclusion
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install .
+          python -c "import importlib.resources as r; p = r.files('faiz_dash.ui') / 'styles.tcss'; assert p.is_file(), 'styles.tcss missing from installed wheel'"
+
+      - name: Syntax check shell scripts
+        run: |
+          bash -n install.sh
+          bash -n scripts/statusline.sh
+          bash -n bin/faiz-dash
+          bash -n bin/_faiz_dash_hook.sh
+
+      - name: Run unittest suite
+        run: PYTHONPATH=src python -m unittest discover -s tests -v

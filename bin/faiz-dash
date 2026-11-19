@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# Unified CLI entrypoint for Faiz Control Center (faiz-dash).
+set -euo pipefail
+
+_resolve_self_dir() {
+    local src="${BASH_SOURCE[0]}"
+    while [ -L "$src" ]; do
+        local dir
+        dir="$(cd -P "$(dirname "$src")" && pwd)"
+        src="$(readlink "$src")"
+        [[ "$src" != /* ]] && src="$dir/$src"
+    done
+    cd -P "$(dirname "$src")" && pwd
+}
+
+SELF_DIR="$(_resolve_self_dir)"
+REPO_SRC="$(cd -P "$SELF_DIR/.." && pwd)/src"
+PROJECT_SRC="${FAIZ_DASH_SRC:-$REPO_SRC}"
+
+_pick_python() {
+    if [ -n "${FAIZ_DASH_PYTHON:-}" ] && [ -x "${FAIZ_DASH_PYTHON}" ]; then
+        echo "${FAIZ_DASH_PYTHON}"
+        return 0
+    fi
+    local cand
+    for cand in "$SELF_DIR/../.venv/bin/python" "$HOME/.venvs/faiz/bin/python" "$HOME/.venvs/faiz-dash/bin/python"; do
+        if [ -x "$cand" ]; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    if command -v python3 >/dev/null 2>&1 && python3 -c "import textual" >/dev/null 2>&1; then
+        command -v python3
+        return 0
+    fi
+    for cand in "$HOME"/.venvs/*/bin/python; do
+        if [ -x "$cand" ] && "$cand" -c "import textual" >/dev/null 2>&1; then
+            echo "$cand"
+            return 0
+        fi
+    done
+    command -v python3
+}
+
+PYTHON_BIN="$(_pick_python)"
+DASH_BIN="${FAIZ_DASH_BIN:-$0}"
+CACHE_DIR="$HOME/.agents/cache"
+DISABLED_FLAG="$CACHE_DIR/dash_disabled"
+
+_resolve_jq() {
+    if [ -x /usr/bin/jq ]; then
+        echo /usr/bin/jq
+    elif command -v jq >/dev/null 2>&1; then
+        command -v jq
+    fi
+}
+
+_read_control_ratio() {
+    local key="$1" fallback="$2" min_val="$3" max_val="$4"
+    local cfg_file jq_bin raw
+    cfg_file="${FAIZ_STATUSLINE_CONFIG:-$HOME/.agents/statusline_config.json}"
+    if [ -f "$cfg_file" ]; then
+        jq_bin=$(_resolve_jq)
+        if [ -n "$jq_bin" ]; then
+            raw=$("$jq_bin" -r --arg k "$key" '.control_center[$k] // empty' "$cfg_file" 2>/dev/null || true)
+            if [[ "$raw" =~ ^[0-9]+$ ]] && [ "$raw" -ge "$min_val" ] && [ "$raw" -le "$max_val" ]; then
+                echo "$raw"
+                return 0
+            fi
+        fi
+    fi
+    echo "$fallback"
+}
+
+_current_rex_window() {
+    local jq_bin="$1"
+    rex whoami --json 2>/dev/null | "$jq_bin" -r '.window_id // empty' 2>/dev/null || true
+}
+
+_count_window_blocks_by_label() {
+    local jq_bin="$1" cur_win="$2" label="$3"
+    rex block list --json 2>/dev/null \
+        | "$jq_bin" -r --arg w "$cur_win" --arg l "$label" '[.blocks[]? | select(.window_id == $w and .label == $l)] | length' 2>/dev/null \
+        || echo 0
+}
+
+_close_window_blocks_by_label() {
+    local jq_bin="$1" cur_win="$2" label="$3" bid
+    while IFS= read -r bid; do
+        [ -n "$bid" ] && rex block close "$bid" >/dev/null 2>&1 || true
+    done < <(
+        rex block list --json 2>/dev/null \
+            | "$jq_bin" -r --arg w "$cur_win" --arg l "$label" '.blocks[]? | select(.window_id == $w and .label == $l) | .block_id' 2>/dev/null \
+            || true
+    )
+}
+
+_close_window_dash_blocks() {
+    command -v rex >/dev/null 2>&1 || return 0
+    local jq_bin cur_win
+    jq_bin=$(_resolve_jq)
+    [ -z "$jq_bin" ] && return 0
+    cur_win=$(_current_rex_window "$jq_bin")
+    [ -z "$cur_win" ] && return 0
+    _close_window_blocks_by_label "$jq_bin" "$cur_win" "faiz-dash"
+    _close_window_blocks_by_label "$jq_bin" "$cur_win" "faiz-dash-side"
+}
+
+_toggle_rex_pane() {
+    local label="$1" split_dir="$2" ratio="$3" preset_val="$4"
+    local rex_blk jq_bin cur_win count
+    rex_blk="${REX_BLOCK_ID:-${REX_BLOCK:-}}"
+    if [ -z "$rex_blk" ] || ! command -v rex >/dev/null 2>&1; then
+        echo "faiz-dash: not inside a Rex pane; use 'faiz-dash inspect' (snapshot) or 'faiz-dash --preset $preset_val' (full TUI)."
+        return 0
+    fi
+    jq_bin=$(_resolve_jq)
+    if [ -z "$jq_bin" ]; then
+        echo "faiz-dash: jq not found; cannot inspect Rex blocks."
+        return 1
+    fi
+    cur_win=$(_current_rex_window "$jq_bin")
+    if [ -z "$cur_win" ]; then
+        echo "faiz-dash: could not resolve current Rex window."
+        return 1
+    fi
+    count=$(_count_window_blocks_by_label "$jq_bin" "$cur_win" "$label")
+    if [ "${count:-0}" -gt 0 ]; then
+        _close_window_blocks_by_label "$jq_bin" "$cur_win" "$label"
+        echo "faiz-dash: closed $label pane"
+        return 0
+    fi
+    if rex split -b "$rex_blk" --split="$split_dir" --ratio "$ratio" --focus=false --label "$label" --shell=none -- "$DASH_BIN" --preset "$preset_val" >/dev/null 2>&1; then
+        echo "faiz-dash: opened $label pane ($split_dir, ${ratio}%)"
+        return 0
+    fi
+    echo "faiz-dash: failed to open $label pane"
+    return 1
+}
+
+case "${1:-}" in
+    off)
+        mkdir -p "$CACHE_DIR"
+        touch "$DISABLED_FLAG"
+        _close_window_dash_blocks
+        echo "faiz-dash: disabled (auto-launch off)"
+        exit 0
+        ;;
+    on)
+        rm -f "$DISABLED_FLAG"
+        rex_blk="${REX_BLOCK_ID:-${REX_BLOCK:-}}"
+        jq_bin=$(_resolve_jq)
+        if [ -n "$rex_blk" ] && command -v rex >/dev/null 2>&1 && [ -n "$jq_bin" ]; then
+            cur_win=$(_current_rex_window "$jq_bin")
+            has_dash=0
+            if [ -n "$cur_win" ]; then
+                has_dash=$(_count_window_blocks_by_label "$jq_bin" "$cur_win" "faiz-dash")
+            fi
+            if [ "${has_dash:-0}" -eq 0 ]; then
+                dock_ratio=$(_read_control_ratio "dock_ratio" "22" "12" "40")
+                rex split -b "$rex_blk" --split=below --ratio "$dock_ratio" --focus=false --label "faiz-dash" --shell=none -- "$DASH_BIN" --dock >/dev/null 2>&1 &
+            fi
+        fi
+        echo "faiz-dash: enabled (auto-launch on)"
+        exit 0
+        ;;
+    side)
+        side_ratio=$(_read_control_ratio "side_ratio" "28" "18" "45")
+        _toggle_rex_pane "faiz-dash-side" "right" "$side_ratio" "2"
+        exit $?
+        ;;
+    dock)
+        dock_ratio=$(_read_control_ratio "dock_ratio" "22" "12" "40")
+        _toggle_rex_pane "faiz-dash" "below" "$dock_ratio" "1"
+        exit $?
+        ;;
+    status)
+        if [ -f "$DISABLED_FLAG" ]; then
+            echo "auto-launch: disabled ($DISABLED_FLAG)"
+        else
+            echo "auto-launch: enabled"
+        fi
+        now=$(date +%s)
+        for name in usage_snapshot.json cloud_snapshot.json; do
+            f="$CACHE_DIR/$name"
+            if [ -f "$f" ]; then
+                mtime=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo "$now")
+                echo "cache $name: age=$((now - mtime))s ($f)"
+            else
+                echo "cache $name: missing"
+            fi
+        done
+        exit 0
+        ;;
+esac
+
+export PYTHONPATH="$PROJECT_SRC${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PYTHON_BIN" -m faiz_dash "$@"

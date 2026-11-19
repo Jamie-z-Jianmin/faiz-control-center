@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faiz-dash"
+version = "0.1.0"
+description = "Antigravity CLI StatusLine companion, exact quota monitor, and Textual control center"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+keywords = ["antigravity", "cli", "statusline", "textual", "tui", "telemetry", "quota"]
+dependencies = [
+    "textual>=8.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+faiz-dash = "faiz_dash.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Jamie-z-Jianmin/faiz-control-center"
+Repository = "https://github.com/Jamie-z-Jianmin/faiz-control-center"
+Issues = "https://github.com/Jamie-z-Jianmin/faiz-control-center/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+faiz_dash = ["ui/*.tcss"]

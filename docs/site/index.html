@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Faiz Control Center (faiz-dash) | Antigravity CLI StatusLine &amp; Quota Telemetry</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --surface: #131926;
+    --surface-2: #192132;
+    --border: #283349;
+    --text: #e6edf3;
+    --muted: #93a1b5;
+    --accent: #6cb6ff;
+    --accent-soft: rgba(108, 182, 255, 0.14);
+    --green: #7ee787;
+    --yellow: #f2cc60;
+    --radius: 14px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    line-height: 1.6;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 36px 24px 72px;
+  }
+  .topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 40px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .brand {
+    font-weight: 700;
+    font-size: 18px;
+    letter-spacing: -0.2px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .brand-pill {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1px solid rgba(108, 182, 255, 0.3);
+  }
+  .nav-links {
+    display: flex;
+    gap: 18px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .hero {
+    margin-bottom: 40px;
+  }
+  .badges {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
+  .badge strong { color: var(--green); font-weight: 600; }
+  h1 {
+    font-size: clamp(30px, 4.5vw, 44px);
+    line-height: 1.15;
+    margin: 0 0 14px;
+    letter-spacing: -0.8px;
+  }
+  .tagline {
+    font-size: 17px;
+    color: var(--muted);
+    max-width: 820px;
+    margin: 0 0 10px;
+  }
+  .tagline-zh {
+    font-size: 15px;
+    color: #7d8da4;
+    max-width: 820px;
+    margin: 0 0 26px;
+  }
+  .install-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-bottom: 36px;
+  }
+  .install-tabs {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 14px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .tab-group { display: flex; gap: 8px; }
+  .tab-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--muted);
+    padding: 5px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tab-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: rgba(108, 182, 255, 0.35);
+  }
+  .copy-btn {
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-family: var(--mono);
+    cursor: pointer;
+  }
+  .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .install-code {
+    margin: 0;
+    padding: 16px 18px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: #d6e4ff;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .hero-shot {
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background: #0d1117;
+    margin-bottom: 48px;
+  }
+  .hero-shot img { display: block; width: 100%; height: auto; }
+  h2 {
+    font-size: 22px;
+    margin: 44px 0 18px;
+    letter-spacing: -0.3px;
+  }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+  }
+  .card h3 {
+    margin: 0 0 8px;
+    font-size: 16px;
+    color: var(--accent);
+  }
+  .card p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .card code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--text);
+  }
+  .gallery {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .shot-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .shot-cap {
+    padding: 10px 16px;
+    font-size: 13px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+    font-weight: 600;
+  }
+  .shot-card img { display: block; width: 100%; height: auto; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    font-size: 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    background: var(--surface-2);
+    color: var(--accent);
+    font-size: 13px;
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { font-family: var(--mono); font-size: 12.5px; color: var(--green); }
+  footer {
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <span>Faiz Control Center</span>
+        <span class="brand-pill">faiz-dash v0.1</span>
+      </div>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#screenshots">Screenshots</a>
+        <a href="#commands">CLI</a>
+        <a href="https://github.com/Jamie-z-Jianmin/faiz-control-center">GitHub</a>
+        <a href="https://github.com/Jamie-z-Jianmin/faiz-control-center/blob/main/README.zh-CN.md">中文文档</a>
+      </nav>
+    </header>
+
+    <section class="hero">
+      <div class="badges">
+        <span class="badge">Render Latency: <strong>&lt;80ms</strong></span>
+        <span class="badge">Quota Parity: <strong>Exact 2dp /usage</strong></span>
+        <span class="badge">Python: <strong>3.12+</strong></span>
+        <span class="badge">License: <strong>MIT</strong></span>
+      </div>
+      <h1>TrueColor StatusLine &amp; Quota Control Center for Antigravity CLI</h1>
+      <p class="tagline">
+        Sub-80ms capsule statusLine, activity-aware 45s quota sync matching <code>/usage</code> to two decimal places, zero-clutter <code>/faiz-dash</code> diagnostic bubbles, and an on-demand Textual TUI.
+      </p>
+      <p class="tagline-zh">
+        专为 Antigravity CLI (<code>agy</code>) 打造的极速 (&lt;80ms) TrueColor 状态栏：两位小数配额逐位对齐、活跃对话 45 秒感知刷新、无占屏气泡诊断与按需 Rex 侧边栏。
+      </p>
+
+      <div class="install-box">
+        <div class="install-tabs">
+          <div class="tab-group">
+            <button type="button" class="tab-btn active" data-tab="curl">One-Line Installer</button>
+            <button type="button" class="tab-btn" data-tab="git">Git Clone (Dev)</button>
+          </div>
+          <button type="button" class="copy-btn" id="copy-btn">Copy</button>
+        </div>
+        <pre class="install-code" id="install-cmd"></pre>
+      </div>
+
+      <div class="hero-shot">
+        <img src="./assets/hero-statusline-themes.png" alt="Faiz StatusLine adaptive 90-col matrix and TrueColor themes" />
+      </div>
+    </section>
+
+    <section id="features">
+      <h2>Core Architecture</h2>
+      <div class="grid-2">
+        <div class="card">
+          <h3>&lt;80ms Pure Bash + jq StatusLine</h3>
+          <p>Reads local snapshots in sub-millisecond time without blocking prompts. Features a 90-col 4x2 aligned matrix on split panes, single-row wide expansion, and automatic 16-color fallback on Apple Terminal.</p>
+        </div>
+        <div class="card">
+          <h3>Exact 2dp /usage Sync (45s Active)</h3>
+          <p>Isolated PTY probe guarded by <code>flock</code> and <code>rfind()</code> tail-frame parsing prevents TUI repaint tearing. Refreshes every 45s during active turns and idles cleanly at 180s.</p>
+        </div>
+        <div class="card">
+          <h3>Zero-Clutter Bubbles &amp; Rex Sidebar</h3>
+          <p>Run <code>/faiz-dash</code> or <code>faiz-dash inspect</code> for full diagnostics in chat with zero column overhead, or toggle an on-demand 28% Rex right sidebar via <code>faiz-dash side</code>.</p>
+        </div>
+        <div class="card">
+          <h3>Local-First, Optional Cloud Swarm</h3>
+          <p>Works out of the box with zero cloud config. When <code>rclone.conf</code> is present, unlocks Colab runtime heartbeats, GCE Spot tracking, Drive rate-limit backoff, and job verification.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="screenshots">
+      <h2>TUI Control Center &amp; Bilingual Settings Studio</h2>
+      <div class="gallery">
+        <div class="shot-card">
+          <div class="shot-cap">Bottom Dock (Preset 1) &amp; On-Demand Rex Sidebar (faiz-dash side)</div>
+          <img src="./assets/control-center-dock-side.png" alt="Faiz Control Center bottom dock and Rex right sidebar" />
+        </div>
+        <div class="shot-card">
+          <div class="shot-cap">Interactive Bilingual Settings Studio with Live TrueColor Preview (faiz-dash config)</div>
+          <img src="./assets/config-studio.png" alt="Faiz StatusLine and Control Center settings TUI" />
+        </div>
+      </div>
+    </section>
+
+    <section id="commands">
+      <h2>CLI Quick Reference</h2>
+      <table>
+        <thead>
+          <tr><th>Command</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>faiz-dash inspect [--live] [--json]</code></td><td>Print non-interactive diagnostic summary of quotas, 24h burn, cloud backoff, mailbox, and telemetry</td></tr>
+          <tr><td><code>faiz-dash side</code></td><td>Toggle 28% right Textual sidebar inside Rex (<code>--focus=false</code>), with native Terminal fallback hint</td></tr>
+          <tr><td><code>faiz-dash dock</code></td><td>Toggle bottom 3-column Dock inside Rex</td></tr>
+          <tr><td><code>faiz-dash config</code></td><td>Open interactive <code>en/zh</code> settings UI (supports CLI flags like <code>--style</code>, <code>--theme</code>, <code>--quota-precision</code>)</td></tr>
+          <tr><td><code>faiz-dash off / on / status</code></td><td>Manage startup auto-dock flag and inspect snapshot cache ages</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      <span>MIT License | Faiz Control Center</span>
+      <a href="https://github.com/Jamie-z-Jianmin/faiz-control-center">github.com/Jamie-z-Jianmin/faiz-control-center</a>
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      var origin = (window.location && /^https?:$/.test(window.location.protocol))
+        ? window.location.origin
+        : "https://raw.githubusercontent.com/Jamie-z-Jianmin/faiz-control-center/main/docs/site";
+      var cmds = {
+        curl: "curl -fsSL " + origin + "/install.sh | bash",
+        git: "git clone https://github.com/Jamie-z-Jianmin/faiz-control-center.git\ncd faiz-control-center\npython3 -m pip install -e .\n./install.sh --link"
+      };
+      var active = "curl";
+      var codeEl = document.getElementById("install-cmd");
+      var copyBtn = document.getElementById("copy-btn");
+      var tabBtns = document.querySelectorAll(".tab-btn");
+
+      function render() {
+        codeEl.textContent = cmds[active];
+        tabBtns.forEach(function (btn) {
+          btn.classList.toggle("active", btn.getAttribute("data-tab") === active);
+        });
+      }
+      tabBtns.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          active = btn.getAttribute("data-tab");
+          render();
+        });
+      });
+      copyBtn.addEventListener("click", function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(cmds[active]);
+          copyBtn.textContent = "Copied!";
+          setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500);
+        }
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>
