@@ -710,7 +710,7 @@ class UsageProbe:
         brain_dir: Path = DEFAULT_BRAIN_DIR,
         cli_log_path: Path = DEFAULT_CLI_LOG,
         semaphore: Optional[asyncio.Semaphore] = None,
-        pty_cooldown_sec: float = 35.0,
+        pty_cooldown_sec: float = 15.0,
     ) -> None:
         self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
         self.agy_bin = agy_bin
@@ -748,7 +748,7 @@ class UsageProbe:
                     lock_path=self.cache_dir / "usage_probe.lock",
                     agy_bin=self.agy_bin,
                     cooldown_sec=self.pty_cooldown_sec,
-                    timeout_sec=12.0,
+                    timeout_sec=14.0,
                     force=force_pty,
                 )
                 source = "cache" if pty_data.get("from_cache") else "pty"

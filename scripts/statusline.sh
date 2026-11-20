@@ -160,8 +160,8 @@ if [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ] && [ -x "$DASH_BIN" ]; then
     need_pty=0
     need_cloud=0
     pty_cooldown=180
-    if [ "$t_mtime" -gt "$u_mt" ]; then
-        pty_cooldown=45
+    if [ "$t_mtime" -gt 0 ] && [ $((now_ts - t_mtime)) -lt 120 ]; then
+        pty_cooldown=20
     fi
     if [ "$u_mt" -eq 0 ] || [ "$p_last" -gt "$pty_cooldown" ]; then
         need_pty=1
@@ -201,7 +201,45 @@ if [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ] && [ -x "$DASH_BIN" ]; then
     fi
 fi
 
-jq_args=(-rn --argjson in "$stdin_payload" --argjson u_mt "$u_mt" --argjson c_mt "$c_mt" --argjson term_cols "$term_cols" --argjson has_tc "$has_tc" --argjson t_mtime "$t_mtime")
+# Incremental single-session total tokens (input + output) from active transcript.jsonl
+sess_tok="null"
+if [ -n "$t_path" ] && [ -s "$t_path" ] && [ "$t_sz" -gt 0 ] 2>/dev/null; then
+    BURN_CACHE="$CACHE_DIR/.session_burn"
+    sb_path=""; sb_off=0; sb_tok=0
+    if [ -s "$BURN_CACHE" ]; then
+        IFS=$'\t' read -r sb_path sb_off sb_tok < "$BURN_CACHE" 2>/dev/null || true
+    fi
+    if [ "$sb_path" != "$t_path" ] || [ "$t_sz" -lt "${sb_off:-0}" ] 2>/dev/null; then
+        sb_off=0
+        sb_tok=0
+    fi
+    sb_off="${sb_off:-0}"
+    sb_tok="${sb_tok:-0}"
+    if [ "$t_sz" -gt "$sb_off" ]; then
+        delta_res=$(tail -c +"$((sb_off + 1))" "$t_path" 2>/dev/null | "$JQ_BIN" -Rrs '
+          endswith("\n") as $full
+          | (if $full then . else ((rindex("\n")) as $idx | if $idx == null then "" else .[0:($idx + 1)] end) end) as $body
+          | ($body | split("\n") | map(select(length > 0) | (try (fromjson | select(.type == "PLANNER_RESPONSE") | ((.input_tokens // 0) + (.output_tokens // 0))) catch 0)) | add // 0) as $add
+          | "\($add)\t\(if $full then 1 else 0 end)"
+        ' 2>/dev/null || true)
+        IFS=$'\t' read -r add_tok is_full <<< "$delta_res"
+        if [ -n "$add_tok" ]; then
+            case "$add_tok:$is_full" in
+                *[!0-9:]*|:*) ;;
+                *:0|*:1)
+                    sb_tok=$((sb_tok + add_tok))
+                    if [ "$is_full" = "1" ]; then
+                        mkdir -p "$CACHE_DIR" 2>/dev/null || true
+                        printf '%s\t%s\t%s\n' "$t_path" "$t_sz" "$sb_tok" > "$BURN_CACHE.tmp.$$" 2>/dev/null && mv -f "$BURN_CACHE.tmp.$$" "$BURN_CACHE" 2>/dev/null || true
+                    fi
+                    ;;
+            esac
+        fi
+    fi
+    sess_tok="$sb_tok"
+fi
+
+jq_args=(-rn --argjson in "$stdin_payload" --argjson u_mt "$u_mt" --argjson c_mt "$c_mt" --argjson term_cols "$term_cols" --argjson has_tc "$has_tc" --argjson t_mtime "$t_mtime" --argjson sess_tok "$sess_tok")
 if [ -s "$USAGE_CACHE" ]; then
     jq_args+=(--slurpfile u "$USAGE_CACHE")
 else
@@ -490,8 +528,21 @@ JQ_FILTER="${JQ_DISP_LEN}"'
   ($in.context_window.used_percentage // null) as $ctx |
   ($u.pro_5h_pct // null) as $pro5 |
   ($u.pro_wk_pct // null) as $prowk |
+  ($u.claude_5h_pct // null) as $cla5 |
   ($u.claude_wk_pct // null) as $cla |
   ($u.argon_wk_pct // null) as $arg |
+  (($cla5 != null and $cla5 < 99.9) or ($cla != null and $cla < 99.9)) as $cla_show |
+  ($use_adaptive_2row and ($eff_cols < 94)) as $cla_int |
+  (if $cla_show then
+    (if $cla5 != null then "\(quota_str($cla5; $q_prec; ($cla_int or $tight_quota or ($q_prec == "int"))))%" else "" end) as $c5p |
+    (if $cla != null then "\(quota_str($cla; $q_prec; ($cla_int or $tight_quota or ($q_prec == "int"))))%" else "" end) as $cwp |
+    (if $c5p != "" and $cwp != "" then "\($c5p)·\($cwp)"
+     elif $cwp != "" then $cwp
+     else $c5p end)
+   else "" end) as $cla_val |
+  (if $cla5 != null and $cla != null then (if $cla5 < $cla then $cla5 else $cla end)
+   elif $cla5 != null then $cla5
+   else $cla end) as $cla_min |
   ($u.quota_gate // "") as $gate |
   ($u.pro_count // null) as $pc |
   ($u.gcp_count // null) as $gc |
@@ -683,15 +734,16 @@ JQ_MAIN='
       }] |
       (
         (if $arg != null then
-          [{t: "Argon ", r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
+          [{t: (if ($use_adaptive_2row and $cla_show) then "Arg " else "Argon " end), r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
           (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
-         else [{t: "Argon ", r: "lbl"}, {t: "--", r: "val"}] end) +
+         else [{t: (if ($use_adaptive_2row and $cla_show) then "Arg " else "Argon " end), r: "lbl"}, {t: "--", r: "val"}] end) +
         (if $gate == "WARN_PRO" then [{t: (if $lang == "en" then (if $compact_gem_lbl then "!" elif $use_adaptive_2row then " Pro!" else " (Pro!)" end) else " (Pro低)" end), r: "acc"}]
          elif $gate == "THROTTLE_ARGON" then [{t: (if $lang == "en" then (if $compact_gem_lbl then "!" elif $use_adaptive_2row then " Low" else " (Low)" end) else " (限)" end), r: "acc"}]
-         else [] end)
+         else [] end) +
+        (if ($use_adaptive_2row and $cla_show) then [{t: "·Cla ", r: "lbl"}, {t: $cla_val, r: "val"}] else [] end)
       ) as $a_parts |
-      (if $gate == "WARN_PRO" then "alert"
-       elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") then "warn"
+      (if $gate == "WARN_PRO" or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 20) then "alert"
+       elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 40) then "warn"
        else "base" end) as $a_slot |
       . + [{
         icon: (if $a_slot != "base" then "▲" elif $ind == "ring" and $arg != null then ring($arg) else "" end),
@@ -699,11 +751,11 @@ JQ_MAIN='
         slot: $a_slot,
         tint: ($a_slot != "base")
       }] |
-      (if ($cla != null and $cla < 99.9) then
-        (if $cla < 20 then "alert" elif $cla < 40 then "warn" else "base" end) as $cl_slot |
+      (if ($cla_show and ($use_adaptive_2row | not)) then
+        (if ($cla_min != null and $cla_min < 20) then "alert" elif ($cla_min != null and $cla_min < 40) then "warn" else "base" end) as $cl_slot |
         . + [{
-          icon: (if $ind == "ring" then ring($cla) else "" end),
-          parts: [{t: (if $use_adaptive_2row then "Cla " else "Claude " end), r: "lbl"}, {t: "\(quota_str($cla; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}],
+          icon: (if $ind == "ring" and $cla_min != null then ring($cla_min) else "" end),
+          parts: [{t: "Claude ", r: "lbl"}, {t: $cla_val, r: "val"}],
           slot: $cl_slot,
           tint: ($cl_slot != "base")
         }]
@@ -718,14 +770,20 @@ JQ_MAIN='
     end
   else . end |
 
-  # 5. Secondary telemetry capsule (1h Token Burn | 5h Quota Reset | CLI Sessions)
+  # 5. Secondary telemetry capsule (Session Token Burn | 5h Quota Reset | CLI Sessions)
   if $m_sess then
-    if $sec_metric == "burn" and ($tok1h != null) then
+    if $sec_metric == "burn" and (($sess_tok != null and $sess_tok > 0) or ($tok1h != null)) then
       (
-        if $tok1h >= 1000000 then "\(($tok1h / 1000000) | fmt1)M/h"
-        elif $tok1h >= 1000 then "\(($tok1h / 1000) | round)K/h"
-        elif $tok1h > 0 then "\($tok1h)/h"
-        else "0K/h" end
+        if ($sess_tok != null and $sess_tok > 0) then
+          if $sess_tok >= 1000000 then "\(($sess_tok / 1000000) | fmt2)M"
+          elif $sess_tok >= 1000 then "\(($sess_tok / 1000) | fmt1)K"
+          else "\($sess_tok)" end
+        else
+          if $tok1h >= 1000000 then "\(($tok1h / 1000000) | fmt1)M/h"
+          elif $tok1h >= 1000 then "\(($tok1h / 1000) | round)K/h"
+          elif $tok1h > 0 then "\($tok1h)/h"
+          else "0K/h" end
+        end
       ) as $burn_txt |
       . + [{
         icon: "◆",

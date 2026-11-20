@@ -37,11 +37,15 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
                 account="user@example.com",
                 buckets=(
                     ModelBucketQuota("GEMINI MODELS", weekly_pct=90.0, five_hour_pct=65.0),
+                    ModelBucketQuota("CLAUDE AND GPT MODELS", weekly_pct=85.17, five_hour_pct=70.35),
                     ModelBucketQuota("GEMINI 4 ARGON", weekly_pct=13.7),
                 ),
             )
             published = await store.publish_quota(q_throttle)
             self.assertEqual(published.quota_gate, "THROTTLE_ARGON")
+            u_json = json.loads(store.usage_cache_path.read_text(encoding="utf-8"))
+            self.assertAlmostEqual(u_json["claude_5h_pct"], 70.35)
+            self.assertAlmostEqual(u_json["claude_wk_pct"], 85.17)
 
             q_warn = QuotaSnapshot(
                 fetched_at="2026-11-18T10:00:00Z",

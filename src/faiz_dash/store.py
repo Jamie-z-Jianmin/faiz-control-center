@@ -145,6 +145,7 @@ def _bucket_pcts(quota: QuotaSnapshot) -> dict[str, Any]:
     pro_wk: Optional[float] = None
     pro_5h_ref = ""
     pro_wk_ref = ""
+    claude_5h: Optional[float] = None
     claude_wk: Optional[float] = None
     argon_wk: Optional[float] = None
     for b in quota.buckets:
@@ -155,6 +156,7 @@ def _bucket_pcts(quota: QuotaSnapshot) -> dict[str, Any]:
             pro_5h_ref = b.five_hour_refresh
             pro_wk_ref = b.weekly_refresh
         elif "CLAUDE" in upper:
+            claude_5h = b.five_hour_pct
             claude_wk = b.weekly_pct
         elif "ARGON" in upper:
             argon_wk = b.weekly_pct
@@ -179,6 +181,7 @@ def _bucket_pcts(quota: QuotaSnapshot) -> dict[str, Any]:
     return {
         "pro_5h_pct": pro_5h,
         "pro_wk_pct": pro_wk,
+        "claude_5h_pct": claude_5h,
         "claude_wk_pct": claude_wk,
         "argon_wk_pct": argon_wk,
         "pro_5h_refresh_text": pro_5h_ref,

@@ -105,7 +105,7 @@ class TestShellScripts(unittest.TestCase):
             self.assertIn("▸ 180t/s", plain)
             self.assertIn("◑ Gemini 5h:57.42% · Wk:87.55%", plain)
             self.assertIn("▲ Argon 13.78% (Low)", plain)
-            self.assertIn("◆ Burn 1.8M/h", plain)
+            self.assertIn("◆ Burn 4.4K", plain)
             self.assertIn("● Colab ON(44m)", plain)
             self.assertIn("▲ Queue 2Q·1F", plain)
             self.assertIn("live", plain)
@@ -130,7 +130,7 @@ class TestShellScripts(unittest.TestCase):
             self.assertIn("Speed 180t/s", plain_lines_91[1])
             self.assertIn("Gemini 57.42%·87.55%", plain_lines_91[1])
             self.assertIn("Argon 13.78%!", plain_lines_91[3])
-            self.assertIn("◆ Burn 1.8M/h", plain_lines_91[3])
+            self.assertIn("◆ Burn 4.4K", plain_lines_91[3])
             self.assertIn("Colab ON(44m)", plain_lines_91[3])
             self.assertIn("Queue 2R · 1F", plain_lines_91[3])
             self.assertNotIn("live", plain_91)
@@ -687,6 +687,101 @@ esac
             self.assertIn("Claude 88.25%", plain)
             self.assertNotIn("Colab", plain)
             self.assertNotIn("Queue", plain)
+
+    def test_statusline_merges_claude_5h_wk_and_tracks_session_burn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            u_file = cache_dir / "usage_snapshot.json"
+            u_file.write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 0.0,
+                        "pro_wk_pct": 17.11,
+                        "claude_5h_pct": 70.35,
+                        "claude_wk_pct": 85.17,
+                        "argon_wk_pct": 9.43,
+                        "quota_gate": "WARN_PRO",
+                        "tokens_1h": 1200000,
+                        "pty_fetched_epoch": int(now - 2),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(u_file, (now - 2, now - 2))
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "colab_state": "ONLINE",
+                        "idle_remaining_seconds": 420,
+                        "mailbox_tasks_count": 0,
+                        "mailbox_failed_count": 2,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            t_file = root / "transcript.jsonl"
+            t_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10))
+            t_file.write_text(
+                json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 3500, "cache_read_tokens": 90000, "output_tokens": 900}) + "\n",
+                encoding="utf-8",
+            )
+            os.utime(t_file, (now - 5, now - 5))
+
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_TRANSCRIPT_PATH": str(t_file),
+                "FAIZ_TERM_WIDTH": "91",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            payload = b'{"context_window":{"used_percentage":17}}'
+            res_91 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
+            lines_91 = res_91.stdout.decode("utf-8", errors="replace").splitlines()
+            self.assertEqual(len(lines_91), 4)
+            plain_91 = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lines_91)).splitlines()
+            self.assertLessEqual(len(plain_91[1]), 89)
+            self.assertIn("Arg 9.43%!·Cla 70%·85%", plain_91[3])
+            self.assertIn("Burn 4.4K", plain_91[3])
+
+            # At >=96 columns (A2 adaptive expansion), Cla displays full 2 decimals and stays 2x4 matrix
+            env_104 = {**env, "FAIZ_TERM_WIDTH": "104"}
+            res_104 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_104, capture_output=True, check=True)
+            lines_104 = res_104.stdout.decode("utf-8", errors="replace").splitlines()
+            self.assertEqual(len(lines_104), 4)
+            plain_104 = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lines_104))
+            self.assertIn("Arg 9.43%!·Cla 70.35%·85.17%", plain_104)
+
+            # Appending turns incrementally updates single-session Burn to 2-decimal M
+            with t_file.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"step_index": 2, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 1_100_000, "output_tokens": 5_600}) + "\n")
+            res_inc = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_104, capture_output=True, check=True)
+            plain_inc = re.sub(r"\x1b\[[0-9;]*m", "", res_inc.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Burn 1.11M", plain_inc)
+
+            # Even when usage_snapshot mtime (now-2) > transcript mtime (now-5), active <120s transcript keeps 20s cooldown
+            p_stamp = cache_dir / ".bg_pty_ts"
+            p_stamp.write_text("", encoding="utf-8")
+            os.utime(p_stamp, (now - 25, now - 25))
+            os.utime(cache_dir / "cloud_snapshot.json", (now - 5, now - 5))
+            (cache_dir / "cloud_backoff.json").write_text(json.dumps({"next_allowed_epoch": now + 180}), encoding="utf-8")
+            marker = root / "dash_fast.log"
+            fake_dash = root / "fake-dash"
+            fake_dash.write_text(f"#!/usr/bin/env bash\necho \"$@\" >> {str(marker)!r}\n", encoding="utf-8")
+            fake_dash.chmod(0o755)
+            env_bg = {**env_104, "FAIZ_DASH_BIN": str(fake_dash)}
+            env_bg.pop("FAIZ_STATUSLINE_NO_BG", None)
+            subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_bg, capture_output=True, check=True)
+            deadline = time.monotonic() + 1.5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists())
+            self.assertIn("--once-json --quota-only", marker.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
