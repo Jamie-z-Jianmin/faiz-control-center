@@ -423,7 +423,19 @@ JQ_FILTER="${JQ_DISP_LEN}"'
       ) | (.rows + (if (.cur | length) > 0 then [.cur] else [] end))
     end;
 
-  def pack_matrix_rows($items; $max_w; $do_wrap; $sep_w; $style):
+  def expand_col_ws($col_ws; $max_w; $sep_w):
+    (($col_ws | add) + ((($col_ws | length) - 1) * $sep_w)) as $cur_w |
+    (if $max_w > 210 then 210 else $max_w end) as $cap_w |
+    ($cap_w - $cur_w) as $extra |
+    if $extra <= 0 or (($col_ws | length) == 0) then $col_ws
+    else
+      reduce range(0; $extra) as $_ (
+        $col_ws;
+        min as $m | (indices($m) | .[0]) as $mi | .[$mi] += 1
+      )
+    end;
+
+  def pack_matrix_rows($items; $max_w; $do_wrap; $sep_w; $style; $expand_w):
     if ($items | length) < 5 or ($do_wrap | not) or $max_w <= 0 then
       pack_rows($items; $max_w; $do_wrap; $sep_w; $style)
     else
@@ -436,9 +448,10 @@ JQ_FILTER="${JQ_DISP_LEN}"'
           (if $c < ($r0 | length) then cap_width($r0[$c]; $style) else 0 end),
           (if $c < ($r1 | length) then cap_width($r1[$c]; $style) else 0 end)
         ] | max
-      ] as $col_ws |
-      (($col_ws | add) + (($cols - 1) * $sep_w)) as $total_w |
+      ] as $raw_ws |
+      (($raw_ws | add) + (($cols - 1) * $sep_w)) as $total_w |
       if $total_w <= $max_w then
+        (if $expand_w then expand_col_ws($raw_ws; $max_w; $sep_w) else $raw_ws end) as $col_ws |
         [
           [range(0; ($r0 | length)) as $c | $r0[$c] + {pad: ($col_ws[$c] - cap_width($r0[$c]; $style))}],
           [range(0; ($r1 | length)) as $c | $r1[$c] + {pad: ($col_ws[$c] - cap_width($r1[$c]; $style))}]
@@ -469,6 +482,7 @@ JQ_FILTER="${JQ_DISP_LEN}"'
   ((if ($raw_cfg.max_width // 0) > 0 then $raw_cfg.max_width else $term_cols end) - 2) as $eff_cols |
   ($density == "compact") as $use_compact |
   ($density == "auto") as $use_adaptive_2row |
+  ($use_adaptive_2row and ($eff_cols >= 155)) as $wide_rich |
   ($use_adaptive_2row and ($eff_cols <= 95)) as $short_pct |
   ($eff_cols < 82) as $tight_quota |
 
@@ -665,8 +679,8 @@ JQ_MAIN='
     if $ctx != null then
       (($ctx | round)) as $cp |
       (if $cp >= 90 then "alert" elif $cp >= 75 then "warn" else "ctx" end) as $ctx_slot |
-      (if $ind == "bar" then
-        [{t: (if $lang == "en" then "Ctx " else "上下文 " end), r: "lbl"}, {t: "\($cp)% ", r: "val"}, {t: bar6($cp), r: "acc"}]
+      (if ($ind == "bar") or $wide_rich then
+        [{t: (if $wide_rich then (if $lang == "en" then "Context " else "上下文 " end) elif $lang == "en" then "Ctx " else "上下文 " end), r: "lbl"}, {t: "\($cp)% ", r: "val"}, {t: bar6($cp), r: "acc"}]
        else
         [{t: (if $lang == "en" then "Ctx " else "上下文 " end), r: "lbl"}, {t: "\($cp)%", r: "val"}]
        end) as $c_parts |
@@ -693,7 +707,9 @@ JQ_MAIN='
       icon: (if $ind == "ring" then ring($cache_hit) else "●" end),
       parts: (
         [{t: (if $lang == "en" then "Cache " else "缓存 " end), r: "lbl"}, {t: "\(pct_str($cache_hit; $short_pct))%", r: "val"}] +
-        (if $cmeta[1] != "" then [{t: $cmeta[1], r: "acc"}] else [] end)
+        (if $cmeta[1] != "" then [{t: $cmeta[1], r: "acc"}]
+         elif $wide_rich and ($cache_age != null) then [{t: (if $lang == "en" then " · Live" else " · 实时" end), r: "lbl"}]
+         else [] end)
       ),
       slot: $cmeta[0],
       tint: $cmeta[2]
@@ -705,7 +721,9 @@ JQ_MAIN='
     (if $live_tps < 10 then ["alert", true] elif $live_tps < 25 then ["warn", true] else ["ok", false] end) as $smeta |
     . + [{
       icon: "▸",
-      parts: (if $use_adaptive_2row then
+      parts: (if $wide_rich then
+                [{t: (if $lang == "en" then "Speed " else "速率 " end), r: "lbl"}, {t: "\($live_tps) tok/s", r: "val"}]
+              elif $use_adaptive_2row then
                 [{t: (if $lang == "en" then "Speed " else "速率 " end), r: "lbl"}, {t: "\($live_tps)t/s", r: "val"}]
               else
                 [{t: "\($live_tps)", r: "val"}, {t: "t/s", r: "lbl"}]
@@ -731,7 +749,18 @@ JQ_MAIN='
             [{t: "Gemini ", r: "lbl"}, {t: "5h:\(quota_str($pro5; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
             (if $ind == "bar" then [{t: " \(bar6($pro5))", r: "acc"}] else [] end)
            else [{t: "Gemini ", r: "lbl"}, {t: "5h:--", r: "val"}] end) +
-          (if $prowk != null then [{t: " · Wk:", r: "lbl"}, {t: "\(quota_str($prowk; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] else [{t: " · Wk:--", r: "lbl"}] end)
+          (if $prowk != null then [{t: " · Wk:", r: "lbl"}, {t: "\(quota_str($prowk; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] else [{t: " · Wk:--", r: "lbl"}] end) +
+          (if $wide_rich and ($reset_ep != null) and ($reset_ep > 0) then
+            (($reset_ep - $now_ts) as $grem |
+             if $grem > 0 then
+               (if $grem >= 3600 then
+                  (($grem / 3600) | floor) as $grh |
+                  ((($grem % 3600) / 60) | floor) as $grm |
+                  "\($grh)h\(if $grm < 10 then "0" else "" end)\($grm)m"
+                else "\(($grem / 60) | floor)m" end) as $grtxt |
+               [{t: " · ↻\($grtxt)", r: "lbl"}]
+             else [] end)
+           else [] end)
         end
       ) as $g_parts |
       (if ($pro5 != null and $pro5 < 20) then "alert"
@@ -748,14 +777,14 @@ JQ_MAIN='
           (if ($cla_tight and $cla_show and $q_prec != "int") then
             [{t: "Arg ", r: "lbl"}, {t: "\($arg | fmt1)", r: "val"}]
            else
-            [{t: (if ($use_adaptive_2row and $cla_show) then "Arg " else "Argon " end), r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
+            [{t: (if ($use_adaptive_2row and $cla_show and ($wide_rich | not)) then "Arg " else "Argon " end), r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
             (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
            end)
-         else [{t: (if ($use_adaptive_2row and $cla_show) then "Arg " else "Argon " end), r: "lbl"}, {t: "--", r: "val"}] end) +
+         else [{t: (if ($use_adaptive_2row and $cla_show and ($wide_rich | not)) then "Arg " else "Argon " end), r: "lbl"}, {t: "--", r: "val"}] end) +
         (if $gate == "WARN_PRO" then [{t: (if $lang == "en" then (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then "!" elif $use_adaptive_2row then " Pro!" else " (Pro!)" end) else " (Pro低)" end), r: "acc"}]
          elif $gate == "THROTTLE_ARGON" then [{t: (if $lang == "en" then (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then "!" elif $use_adaptive_2row then " Low" else " (Low)" end) else " (限)" end), r: "acc"}]
          else [] end) +
-        (if ($use_adaptive_2row and $cla_show) then [{t: "·Cla ", r: "lbl"}, {t: $cla_val, r: "val"}] else [] end)
+        (if ($use_adaptive_2row and $cla_show) then [{t: (if $wide_rich then " · Claude " else "·Cla " end), r: "lbl"}, {t: $cla_val, r: "val"}] else [] end)
       ) as $a_parts |
       (if $gate == "WARN_PRO" or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 20) then "alert"
        elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 40) then "warn"
@@ -800,12 +829,21 @@ JQ_MAIN='
           else "0K/h" end
         end
       ) as $burn_txt |
+      (
+        if $wide_rich and ($sess_tok != null and $sess_tok > 0) and ($tok1h != null and $tok1h > 0) then
+          (if $tok1h >= 1000000 then "\(($tok1h / 1000000) | fmt1)M"
+           elif $tok1h >= 1000 then "\(($tok1h / 1000) | round)K"
+           else "\($tok1h)" end) as $h1_txt |
+          [{t: (if $lang == "en" then "Session " else "本话 " end), r: "lbl"}, {t: $burn_txt, r: "val"}, {t: " · 1h:\($h1_txt)", r: "lbl"}]
+        elif $wide_rich and ($sess_tok != null and $sess_tok > 0) then
+          [{t: (if $lang == "en" then "Session " else "本话 " end), r: "lbl"}, {t: $burn_txt, r: "val"}]
+        else
+          [{t: (if $lang == "en" then "Burn " else "消耗 " end), r: "lbl"}, {t: $burn_txt, r: "val"}]
+        end
+      ) as $b_parts |
       . + [{
         icon: "◆",
-        parts: [
-          {t: (if $lang == "en" then "Burn " else "消耗 " end), r: "lbl"},
-          {t: $burn_txt, r: "val"}
-        ],
+        parts: $b_parts,
         slot: "base",
         tint: false
       }]
@@ -848,16 +886,16 @@ JQ_MAIN='
   if $m_colab and ($clb != "") and ($clb != "NOT_CONFIGURED") then
     (
       if $clb == "ONLINE" then
-        ["●", [{t: "Colab ", r: "lbl"}, {t: ((if $lang == "en" then "ON" else "在线" end) + (if $idle != null then "(\(($idle / 60) | floor)m)" else "" end)), r: "val"}], "ok", false]
+        ["●", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then ((if $lang == "en" then "ONLINE" else "在线" end) + (if $idle != null then (if $lang == "en" then " · \(($idle / 60) | floor)m left" else " · 余\(($idle / 60) | floor)分" end) else "" end)) else ((if $lang == "en" then "ON" else "在线" end) + (if $idle != null then "(\(($idle / 60) | floor)m)" else "" end)) end), r: "val"}], "ok", false]
       elif $clb == "STOPPED" then
         ["○", [{t: "Colab ", r: "lbl"}, {t: (if $lang == "en" then "IDLE" else "停机" end), r: "lbl"}], "muted", false]
       elif $clb == "STALE_OFFLINE" then
         ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $lang == "en" then "STALE!" else "失联!" end), r: "acc"}], "alert", true]
       elif $clb == "DEGRADED" then
         (if $err_kind == "rate_limit" then
-          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $lang == "en" then "LIMIT" else "限流" end), r: "acc"}], "warn", true]
+          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then (if $lang == "en" then "LIMIT · Rate" else "限流 · Rate" end) elif $lang == "en" then "LIMIT" else "限流" end), r: "acc"}], "warn", true]
          else
-          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $lang == "en" then "TIMEOUT" else "超时" end), r: "acc"}], "warn", true]
+          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then (if $lang == "en" then "TIMEOUT · Net" else "超时 · Net" end) elif $lang == "en" then "TIMEOUT" else "超时" end), r: "acc"}], "warn", true]
          end)
       else
         ["◐", [{t: "Colab ", r: "lbl"}, {t: $clb, r: "acc"}], "warn", true]
@@ -880,7 +918,7 @@ JQ_MAIN='
     elif $use_adaptive_2row then
       (
         if ($mf // 0) > 0 and $mt > 0 then
-          ["▲", "alert", true, (if $lang == "en" then "\($mt)R · \($mf)F" else "\($mt)运 · \($mf)败" end)]
+          ["▲", "alert", true, (if $wide_rich then (if $lang == "en" then "\($mt) Run · \($mf) Fail" else "\($mt)运行 · \($mf)失败" end) elif $lang == "en" then "\($mt)R · \($mf)F" else "\($mt)运 · \($mf)败" end)]
         elif ($mf // 0) > 0 then
           ["▲", "alert", true, (if $lang == "en" then "\($mf) Fail" else "\($mf)失败" end)]
         elif $mt > 0 then
@@ -889,7 +927,8 @@ JQ_MAIN='
           ["·", "base", false, (if $lang == "en" then "Idle" else "空闲" end)]
         end
       ) as $qm2 |
-      (if $m_fresh and ($max_age >= 180) and ($max_age < 999999) and ((($cloud_ok | not) and ($clb == "DEGRADED")) | not)
+      (if $wide_rich and ($md > 0) then [{t: (if $lang == "en" then " · \($md) Done" else " · \($md)完成" end), r: "lbl"}]
+       elif $m_fresh and ($max_age >= 180) and ($max_age < 999999) and ((($cloud_ok | not) and ($clb == "DEGRADED")) | not)
        then [{t: (if $lang == "en" then " · \(($max_age / 60) | floor)m" else " · \(($max_age / 60) | floor)分" end), r: "lbl"}]
        else [] end) as $inline_age |
       . + [{
@@ -937,9 +976,9 @@ JQ_MAIN='
 '
 
 JQ_TAIL=' |
-  (if ($eff_style == "minimal") then " | " elif ($use_compact or $use_adaptive_2row) then " " else "  " end) as $sep |
+  (if ($eff_style == "minimal") then " | " elif $wide_rich then "  " elif ($use_compact or $use_adaptive_2row) then " " else "  " end) as $sep |
   ($sep | disp_len) as $sep_w |
-  (if $use_adaptive_2row then pack_matrix_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style)
+  (if $use_adaptive_2row then pack_matrix_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style; $wide_rich)
    else pack_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style) end) as $rows |
   ($use_adaptive_2row and (($rows | length) == 2)) as $is_matrix |
   [

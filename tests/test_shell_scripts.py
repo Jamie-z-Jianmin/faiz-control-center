@@ -80,7 +80,7 @@ class TestShellScripts(unittest.TestCase):
                 }
             ).encode("utf-8")
 
-            # Warm run timing on wide terminal (W1 default auto: unified 2x4 aligned matrix + hairlines)
+            # Warm run timing on wide terminal (W1-A default auto: unified 2x4 bento matrix + equalized column expansion)
             subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
             t0 = time.perf_counter()
             res = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
@@ -95,7 +95,8 @@ class TestShellScripts(unittest.TestCase):
             plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
             plain_lines = plain.splitlines()
             self.assertEqual(len({len(ln) for ln in plain_lines}), 1)
-            self.assertEqual(plain.count("Ctx "), 1)
+            self.assertEqual(len(plain_lines[1]), 188)
+            self.assertEqual(plain.count("Context "), 1)
             self.assertIn("\ue0b6", out)
             self.assertIn("\ue0b4", out)
             self.assertIn("35;45;64", out)       # Unified deep slate-blue dashboard glass
@@ -104,14 +105,15 @@ class TestShellScripts(unittest.TestCase):
             self.assertIn("238;243;252", out)     # Row 1 crisp value
             self.assertNotIn("27;52;38", out)     # No Row 2 frosted green in unified 2x4 matrix
             self.assertIn("\x1b[0m", out)
-            self.assertIn("◔ Ctx 32%", plain_lines[1])
-            self.assertIn("● Cache 98.5%", plain_lines[1])
-            self.assertIn("▸ Speed 180t/s", plain_lines[1])
+            self.assertIn("◔ Context 32% ■■□□□□", plain_lines[1])
+            self.assertIn("● Cache 98.5% · Live", plain_lines[1])
+            self.assertIn("▸ Speed 180 tok/s", plain_lines[1])
             self.assertIn("◑ Gemini 5h:57.42% · Wk:87.55%", plain_lines[1])
+            self.assertIn("· ↻", plain_lines[1])
             self.assertIn("▲ Argon 13.78% Low", plain_lines[3])
-            self.assertIn("◆ Burn 4.4K", plain_lines[3])
-            self.assertIn("● Colab ON(44m)", plain_lines[3])
-            self.assertIn("▲ Queue 2R · 1F", plain_lines[3])
+            self.assertIn("◆ Session 4.4K · 1h:1.8M", plain_lines[3])
+            self.assertIn("● Colab ONLINE · 44m left", plain_lines[3])
+            self.assertIn("▲ Queue 2 Run · 1 Fail", plain_lines[3])
             self.assertLess(elapsed_ms, 80.0)
 
             # 91-col split with density="auto": 4-col aligned frosted matrix + faint top/mid hairline dividers
@@ -299,7 +301,7 @@ class TestShellScripts(unittest.TestCase):
             plain_gh = re.sub(r"\x1b\[[0-9;]*m", "", out_gh)
             self.assertNotIn("\x1b[48;2;", out_gh)
             self.assertIn("107;114;128", out_gh)
-            self.assertIn("[◑ Ctx 40%]", plain_gh)
+            self.assertIn("[◑ Context 40% ■■□□□□]", plain_gh)
 
             # Powerline style with Google theme uses Material 800 deep shades + crisp white fg
             cfg_file.write_text(json.dumps({"style": "powerline", "theme": "google", "indicator": "bar"}), encoding="utf-8")
@@ -325,7 +327,7 @@ class TestShellScripts(unittest.TestCase):
             self.assertNotIn("\x1b[48;2;", out_ap)
             self.assertNotIn("[◔", out_ap)
             self.assertIn(" | ", out_ap)
-            self.assertIn("Ctx 40% ■■□□□□", out_ap)
+            self.assertIn("Context 40% ■■□□□□", out_ap)
 
     def test_statusline_broken_stdin_path_falls_back_to_cli_brain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -354,7 +356,7 @@ class TestShellScripts(unittest.TestCase):
             res = subprocess.run([str(STATUSLINE_SH)], input=broken_payload, env=env, capture_output=True, check=True)
             plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
             self.assertIn("Cache 95.0%", plain)
-            self.assertIn("100t/s", plain)
+            self.assertIn("100 tok/s", plain)
 
     def test_statusline_graceful_without_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -699,7 +701,7 @@ esac
             res = subprocess.run([str(STATUSLINE_SH)], input=b"{}", env=env, capture_output=True, check=True)
             plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
             self.assertIn("Gemini 5h:80.25% · Wk:91.50%", plain)
-            self.assertIn("Arg 64.00%·Cla 88.25%", plain)
+            self.assertIn("Argon 64.00% · Claude 88.25%", plain)
             self.assertNotIn("Colab", plain)
             self.assertNotIn("Queue", plain)
 
@@ -787,7 +789,7 @@ esac
             self.assertEqual(len({len(ln) for ln in plain_104_lines}), 1)
             self.assertIn("Arg 9.43%!·Cla 70.35%·85.17%", plain_104_lines[3])
 
-            # At >=155 columns (W1 wide 2x4 matrix), full 5h:/Wk: labels + merged Arg·Cla stay aligned 2x4
+            # At >=155 columns (W1-A wide 2x4 bento matrix), full labels + merged Argon·Claude spread evenly to eff_cols
             env_180 = {**env, "FAIZ_TERM_WIDTH": "180"}
             res_180 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_180, capture_output=True, check=True)
             lines_180 = res_180.stdout.decode("utf-8", errors="replace").splitlines()
@@ -796,8 +798,9 @@ esac
             self.assertIn("─", plain_180_lines[0])
             self.assertIn("╌", plain_180_lines[2])
             self.assertEqual(len({len(ln) for ln in plain_180_lines}), 1)
+            self.assertEqual(len(plain_180_lines[1]), 178)
             self.assertIn("Gemini 5h:0.00% · Wk:17.11%", plain_180_lines[1])
-            self.assertIn("Arg 9.43%!·Cla 70.35%·85.17%", plain_180_lines[3])
+            self.assertIn("Argon 9.43%! · Claude 70.35%·85.17%", plain_180_lines[3])
             self.assertIn("Queue 2 Fail", plain_180_lines[3])
 
             # Appending turns incrementally updates single-session Burn to 2-decimal M
