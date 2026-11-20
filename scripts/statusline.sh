@@ -32,6 +32,10 @@ _sniff_term_width() {
         term_cols="$COLUMNS"
         return
     fi
+    if [[ "$stdin_payload" =~ \"terminal_width\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -gt 0 ] 2>/dev/null; then
+        term_cols="${BASH_REMATCH[1]}"
+        return
+    fi
     local rex_blk="${REX_BLOCK_ID:-${REX_BLOCK:-}}"
     if [ -n "$rex_blk" ] && command -v rex >/dev/null 2>&1; then
         local r_cols
@@ -532,13 +536,19 @@ JQ_FILTER="${JQ_DISP_LEN}"'
   ($u.claude_wk_pct // null) as $cla |
   ($u.argon_wk_pct // null) as $arg |
   (($cla5 != null and $cla5 < 99.9) or ($cla != null and $cla < 99.9)) as $cla_show |
-  ($use_adaptive_2row and ($eff_cols < 94)) as $cla_int |
+  ($use_adaptive_2row and ($eff_cols < 100)) as $cla_tight |
   (if $cla_show then
-    (if $cla5 != null then "\(quota_str($cla5; $q_prec; ($cla_int or $tight_quota or ($q_prec == "int"))))%" else "" end) as $c5p |
-    (if $cla != null then "\(quota_str($cla; $q_prec; ($cla_int or $tight_quota or ($q_prec == "int"))))%" else "" end) as $cwp |
-    (if $c5p != "" and $cwp != "" then "\($c5p)·\($cwp)"
-     elif $cwp != "" then $cwp
-     else $c5p end)
+    (if $cla_tight or $tight_quota or ($q_prec == "int") then
+      (if $cla5 != null and $cla != null then "\($cla5 | round)·\($cla | round)%"
+       elif $cla != null then "\($cla | round)%"
+       else "\($cla5 | round)%" end)
+     else
+      (if $cla5 != null then "\(quota_str($cla5; $q_prec; false))%" else "" end) as $c5p |
+      (if $cla != null then "\(quota_str($cla; $q_prec; false))%" else "" end) as $cwp |
+      (if $c5p != "" and $cwp != "" then "\($c5p)·\($cwp)"
+       elif $cwp != "" then $cwp
+       else $c5p end)
+     end)
    else "" end) as $cla_val |
   (if $cla5 != null and $cla != null then (if $cla5 < $cla then $cla5 else $cla end)
    elif $cla5 != null then $cla5
@@ -709,12 +719,13 @@ JQ_MAIN='
   if $m_quota then
     if $pro5 != null or $prowk != null or $arg != null then
       ($use_adaptive_2row and ($q_prec != "int") and ($tight_quota | not)) as $compact_gem_lbl |
+      (if ($cla_tight and $cla_show and $q_prec != "int") then "1dp" else $q_prec end) as $gem_prec |
       (
         if $compact_gem_lbl then
           (if $pro5 != null then
-            [{t: "Gemini ", r: "lbl"}, {t: "\(quota_str($pro5; $q_prec; $tight_quota))%", r: "val"}]
+            [{t: "Gemini ", r: "lbl"}, {t: "\(quota_str($pro5; $gem_prec; $tight_quota))%", r: "val"}]
            else [{t: "Gemini ", r: "lbl"}, {t: "--", r: "val"}] end) +
-          (if $prowk != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($prowk; $q_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
+          (if $prowk != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($prowk; $gem_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
         else
           (if $pro5 != null then
             [{t: "Gemini ", r: "lbl"}, {t: "5h:\(quota_str($pro5; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
@@ -734,8 +745,12 @@ JQ_MAIN='
       }] |
       (
         (if $arg != null then
-          [{t: (if ($use_adaptive_2row and $cla_show) then "Arg " else "Argon " end), r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
-          (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
+          (if ($cla_tight and $cla_show and $q_prec != "int") then
+            [{t: "Arg ", r: "lbl"}, {t: "\($arg | fmt1)", r: "val"}]
+           else
+            [{t: (if ($use_adaptive_2row and $cla_show) then "Arg " else "Argon " end), r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
+            (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
+           end)
          else [{t: (if ($use_adaptive_2row and $cla_show) then "Arg " else "Argon " end), r: "lbl"}, {t: "--", r: "val"}] end) +
         (if $gate == "WARN_PRO" then [{t: (if $lang == "en" then (if $compact_gem_lbl then "!" elif $use_adaptive_2row then " Pro!" else " (Pro!)" end) else " (Pro低)" end), r: "acc"}]
          elif $gate == "THROTTLE_ARGON" then [{t: (if $lang == "en" then (if $compact_gem_lbl then "!" elif $use_adaptive_2row then " Low" else " (Low)" end) else " (限)" end), r: "acc"}]

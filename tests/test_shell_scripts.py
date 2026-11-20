@@ -740,22 +740,30 @@ esac
                 "TERM": "xterm-kitty",
                 "COLORTERM": "truecolor",
             }
-            payload = b'{"context_window":{"used_percentage":17}}'
-            res_91 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
-            lines_91 = res_91.stdout.decode("utf-8", errors="replace").splitlines()
-            self.assertEqual(len(lines_91), 4)
-            plain_91 = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lines_91)).splitlines()
-            self.assertLessEqual(len(plain_91[1]), 89)
-            self.assertIn("Arg 9.43%!·Cla 70%·85%", plain_91[3])
-            self.assertIn("Burn 4.4K", plain_91[3])
+            payload = b'{"context_window":{"used_percentage":17},"terminal_width":90}'
+            env_90 = {k: v for k, v in env.items() if k != "FAIZ_TERM_WIDTH"}
+            res_90 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_90, capture_output=True, check=True)
+            lines_90 = res_90.stdout.decode("utf-8", errors="replace").splitlines()
+            self.assertEqual(len(lines_90), 4)
+            plain_90 = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lines_90)).splitlines()
+            self.assertIn("─", plain_90[0])
+            self.assertIn("╌", plain_90[2])
+            self.assertEqual(len({len(ln) for ln in plain_90}), 1)
+            self.assertLessEqual(len(plain_90[1]), 88)
+            self.assertIn("Gemini 0.0%·17.1%", plain_90[1])
+            self.assertIn("Arg 9.4!·Cla 70·85%", plain_90[3])
+            self.assertIn("Burn 4.4K", plain_90[3])
 
-            # At >=96 columns (A2 adaptive expansion), Cla displays full 2 decimals and stays 2x4 matrix
+            # At >=96 columns (A2 adaptive expansion), Cla displays full 2 decimals and stays aligned 2x4 matrix
             env_104 = {**env, "FAIZ_TERM_WIDTH": "104"}
             res_104 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_104, capture_output=True, check=True)
             lines_104 = res_104.stdout.decode("utf-8", errors="replace").splitlines()
             self.assertEqual(len(lines_104), 4)
-            plain_104 = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lines_104))
-            self.assertIn("Arg 9.43%!·Cla 70.35%·85.17%", plain_104)
+            plain_104_lines = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lines_104)).splitlines()
+            self.assertIn("─", plain_104_lines[0])
+            self.assertIn("╌", plain_104_lines[2])
+            self.assertEqual(len({len(ln) for ln in plain_104_lines}), 1)
+            self.assertIn("Arg 9.43%!·Cla 70.35%·85.17%", plain_104_lines[3])
 
             # Appending turns incrementally updates single-session Burn to 2-decimal M
             with t_file.open("a", encoding="utf-8") as fh:
