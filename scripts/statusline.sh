@@ -745,11 +745,6 @@ JQ_MAIN='
            else [{t: "Gemini ", r: "lbl"}, {t: "--", r: "val"}] end) +
           (if $prowk != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($prowk; $gem_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
         else
-          (if $pro5 != null then
-            [{t: "Gemini ", r: "lbl"}, {t: "5h:\(quota_str($pro5; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
-            (if $ind == "bar" then [{t: " \(bar6($pro5))", r: "acc"}] else [] end)
-           else [{t: "Gemini ", r: "lbl"}, {t: "5h:--", r: "val"}] end) +
-          (if $prowk != null then [{t: " · Wk:", r: "lbl"}, {t: "\(quota_str($prowk; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] else [{t: " · Wk:--", r: "lbl"}] end) +
           (if $wide_rich and ($reset_ep != null) and ($reset_ep > 0) then
             (($reset_ep - $now_ts) as $grem |
              if $grem > 0 then
@@ -758,9 +753,15 @@ JQ_MAIN='
                   ((($grem % 3600) / 60) | floor) as $grm |
                   "\($grh)h\(if $grm < 10 then "0" else "" end)\($grm)m"
                 else "\(($grem / 60) | floor)m" end) as $grtxt |
-               [{t: " · ↻\($grtxt)", r: "lbl"}]
+               [{t: "(↻\($grtxt))", r: "lbl"}]
              else [] end)
-           else [] end)
+           else [] end) as $g_rst |
+          (if $pro5 != null then
+            [{t: "Gemini ", r: "lbl"}, {t: "5h:\(quota_str($pro5; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
+            $g_rst +
+            (if $ind == "bar" then [{t: " \(bar6($pro5))", r: "acc"}] else [] end)
+           else [{t: "Gemini ", r: "lbl"}, {t: "5h:--", r: "val"}] + $g_rst end) +
+          (if $prowk != null then [{t: " · Wk:", r: "lbl"}, {t: "\(quota_str($prowk; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] else [{t: " · Wk:--", r: "lbl"}] end)
         end
       ) as $g_parts |
       (if ($pro5 != null and $pro5 < 20) then "alert"
