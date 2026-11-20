@@ -366,7 +366,7 @@ JQ_FILTER="${JQ_DISP_LEN}"'
     end;
 
   def repeat_str($ch; $n):
-    if $n <= 0 then "" else [range(0; $n) | $ch] | join("") end;
+    if $n <= 0 then "" else ($ch * $n) end;
 
   def item_plain($it):
     (if $it.icon != "" then "\($it.icon) " else "" end) + ($it.parts | map(.t) | join(""));
@@ -468,7 +468,7 @@ JQ_FILTER="${JQ_DISP_LEN}"'
   (if ($raw_cfg.auto_wrap == false) then false else true end) as $auto_wrap |
   ((if ($raw_cfg.max_width // 0) > 0 then $raw_cfg.max_width else $term_cols end) - 2) as $eff_cols |
   ($density == "compact") as $use_compact |
-  ($density == "auto" and ($eff_cols < 155)) as $use_adaptive_2row |
+  ($density == "auto") as $use_adaptive_2row |
   ($use_adaptive_2row and ($eff_cols <= 95)) as $short_pct |
   ($eff_cols < 82) as $tight_quota |
 
@@ -718,7 +718,7 @@ JQ_MAIN='
   # 4. Quota & Argon capsules
   if $m_quota then
     if $pro5 != null or $prowk != null or $arg != null then
-      ($use_adaptive_2row and ($q_prec != "int") and ($tight_quota | not)) as $compact_gem_lbl |
+      ($use_adaptive_2row and ($eff_cols < 155) and ($q_prec != "int") and ($tight_quota | not)) as $compact_gem_lbl |
       (if ($cla_tight and $cla_show and $q_prec != "int") then "1dp" else $q_prec end) as $gem_prec |
       (
         if $compact_gem_lbl then
@@ -752,8 +752,8 @@ JQ_MAIN='
             (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
            end)
          else [{t: (if ($use_adaptive_2row and $cla_show) then "Arg " else "Argon " end), r: "lbl"}, {t: "--", r: "val"}] end) +
-        (if $gate == "WARN_PRO" then [{t: (if $lang == "en" then (if $compact_gem_lbl then "!" elif $use_adaptive_2row then " Pro!" else " (Pro!)" end) else " (Pro低)" end), r: "acc"}]
-         elif $gate == "THROTTLE_ARGON" then [{t: (if $lang == "en" then (if $compact_gem_lbl then "!" elif $use_adaptive_2row then " Low" else " (Low)" end) else " (限)" end), r: "acc"}]
+        (if $gate == "WARN_PRO" then [{t: (if $lang == "en" then (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then "!" elif $use_adaptive_2row then " Pro!" else " (Pro!)" end) else " (Pro低)" end), r: "acc"}]
+         elif $gate == "THROTTLE_ARGON" then [{t: (if $lang == "en" then (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then "!" elif $use_adaptive_2row then " Low" else " (Low)" end) else " (限)" end), r: "acc"}]
          else [] end) +
         (if ($use_adaptive_2row and $cla_show) then [{t: "·Cla ", r: "lbl"}, {t: $cla_val, r: "val"}] else [] end)
       ) as $a_parts |

@@ -80,17 +80,21 @@ class TestShellScripts(unittest.TestCase):
                 }
             ).encode("utf-8")
 
-            # Warm run timing on wide terminal (single line, subtle capsule glass surface)
+            # Warm run timing on wide terminal (W1 default auto: unified 2x4 aligned matrix + hairlines)
             subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
             t0 = time.perf_counter()
             res = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
 
             raw_out = res.stdout.decode("utf-8", errors="replace")
-            self.assertTrue(raw_out.startswith("\n"))  # top_gap=True default breathing space
             out = raw_out.strip()
+            ansi_lines = out.splitlines()
+            self.assertEqual(len(ansi_lines), 4)
+            self.assertIn("─", ansi_lines[0])
+            self.assertIn("╌", ansi_lines[2])
             plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
-            self.assertNotIn("\n", out)
+            plain_lines = plain.splitlines()
+            self.assertEqual(len({len(ln) for ln in plain_lines}), 1)
             self.assertEqual(plain.count("Ctx "), 1)
             self.assertIn("\ue0b6", out)
             self.assertIn("\ue0b4", out)
@@ -98,17 +102,16 @@ class TestShellScripts(unittest.TestCase):
             self.assertIn("138;180;248", out)     # Row 1 accent
             self.assertIn("156;172;198", out)     # Row 1 harmonized label tint
             self.assertIn("238;243;252", out)     # Row 1 crisp value
-            self.assertNotIn("27;52;38", out)     # No Row 2 frosted green on 190-col single line
+            self.assertNotIn("27;52;38", out)     # No Row 2 frosted green in unified 2x4 matrix
             self.assertIn("\x1b[0m", out)
-            self.assertIn("◔ Ctx 32%", plain)
-            self.assertIn("● Cache 98.5%", plain)
-            self.assertIn("▸ 180t/s", plain)
-            self.assertIn("◑ Gemini 5h:57.42% · Wk:87.55%", plain)
-            self.assertIn("▲ Argon 13.78% (Low)", plain)
-            self.assertIn("◆ Burn 4.4K", plain)
-            self.assertIn("● Colab ON(44m)", plain)
-            self.assertIn("▲ Queue 2Q·1F", plain)
-            self.assertIn("live", plain)
+            self.assertIn("◔ Ctx 32%", plain_lines[1])
+            self.assertIn("● Cache 98.5%", plain_lines[1])
+            self.assertIn("▸ Speed 180t/s", plain_lines[1])
+            self.assertIn("◑ Gemini 5h:57.42% · Wk:87.55%", plain_lines[1])
+            self.assertIn("▲ Argon 13.78% Low", plain_lines[3])
+            self.assertIn("◆ Burn 4.4K", plain_lines[3])
+            self.assertIn("● Colab ON(44m)", plain_lines[3])
+            self.assertIn("▲ Queue 2R · 1F", plain_lines[3])
             self.assertLess(elapsed_ms, 80.0)
 
             # 91-col split with density="auto": 4-col aligned frosted matrix + faint top/mid hairline dividers
@@ -182,6 +185,17 @@ class TestShellScripts(unittest.TestCase):
             self.assertNotIn("35;45;64", parts[1])
             self.assertIn("2Q·1F", parts[1])
 
+            # Explicit density="expanded" on 190-col wide renders single-row expanded capsules with freshness
+            res_exp_wide = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
+            raw_exp_wide = res_exp_wide.stdout.decode("utf-8", errors="replace")
+            self.assertTrue(raw_exp_wide.startswith("\n"))
+            plain_exp_wide = re.sub(r"\x1b\[[0-9;]*m", "", raw_exp_wide.strip())
+            self.assertNotIn("\n", plain_exp_wide)
+            self.assertIn("▸ 180t/s", plain_exp_wide)
+            self.assertIn("▲ Argon 13.78% (Low)", plain_exp_wide)
+            self.assertIn("▲ Queue 2Q·1F", plain_exp_wide)
+            self.assertIn("live", plain_exp_wide)
+
     def test_statusline_custom_config_zh_and_degraded_tag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fake_home = Path(tmp)
@@ -225,6 +239,7 @@ class TestShellScripts(unittest.TestCase):
                         "language": "zh",
                         "style": "pill",
                         "indicator": "bar",
+                        "density": "expanded",
                         "theme": "custom",
                         "color_mode": "semantic",
                         "top_gap": True,
@@ -684,9 +699,16 @@ esac
             res = subprocess.run([str(STATUSLINE_SH)], input=b"{}", env=env, capture_output=True, check=True)
             plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
             self.assertIn("Gemini 5h:80.25% · Wk:91.50%", plain)
-            self.assertIn("Claude 88.25%", plain)
+            self.assertIn("Arg 64.00%·Cla 88.25%", plain)
             self.assertNotIn("Colab", plain)
             self.assertNotIn("Queue", plain)
+
+            (fake_home / ".agents" / "statusline_config.json").write_text(
+                json.dumps({"density": "expanded"}), encoding="utf-8"
+            )
+            res_exp = subprocess.run([str(STATUSLINE_SH)], input=b"{}", env=env, capture_output=True, check=True)
+            plain_exp = re.sub(r"\x1b\[[0-9;]*m", "", res_exp.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Claude 88.25%", plain_exp)
 
     def test_statusline_merges_claude_5h_wk_and_tracks_session_burn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -764,6 +786,19 @@ esac
             self.assertIn("╌", plain_104_lines[2])
             self.assertEqual(len({len(ln) for ln in plain_104_lines}), 1)
             self.assertIn("Arg 9.43%!·Cla 70.35%·85.17%", plain_104_lines[3])
+
+            # At >=155 columns (W1 wide 2x4 matrix), full 5h:/Wk: labels + merged Arg·Cla stay aligned 2x4
+            env_180 = {**env, "FAIZ_TERM_WIDTH": "180"}
+            res_180 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_180, capture_output=True, check=True)
+            lines_180 = res_180.stdout.decode("utf-8", errors="replace").splitlines()
+            self.assertEqual(len(lines_180), 4)
+            plain_180_lines = re.sub(r"\x1b\[[0-9;]*m", "", "\n".join(lines_180)).splitlines()
+            self.assertIn("─", plain_180_lines[0])
+            self.assertIn("╌", plain_180_lines[2])
+            self.assertEqual(len({len(ln) for ln in plain_180_lines}), 1)
+            self.assertIn("Gemini 5h:0.00% · Wk:17.11%", plain_180_lines[1])
+            self.assertIn("Arg 9.43%!·Cla 70.35%·85.17%", plain_180_lines[3])
+            self.assertIn("Queue 2 Fail", plain_180_lines[3])
 
             # Appending turns incrementally updates single-session Burn to 2-decimal M
             with t_file.open("a", encoding="utf-8") as fh:
