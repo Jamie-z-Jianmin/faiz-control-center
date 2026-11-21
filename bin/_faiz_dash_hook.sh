@@ -23,7 +23,7 @@ _faiz_dash_spawn_if_needed() {
         if [ -d "$lock_dir" ]; then
             local now mtime
             now=$(date +%s 2>/dev/null || echo 0)
-            mtime=$(stat -f %m "$lock_dir" 2>/dev/null || stat -c %Y "$lock_dir" 2>/dev/null || echo "$now")
+            mtime=$(stat -c %Y "$lock_dir" 2>/dev/null || stat -f %m "$lock_dir" 2>/dev/null || echo "$now")
             if [ $((now - mtime)) -gt 15 ]; then
                 rmdir "$lock_dir" 2>/dev/null || true
                 mkdir "$lock_dir" 2>/dev/null || return 0

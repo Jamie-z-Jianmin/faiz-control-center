@@ -486,7 +486,10 @@ class TestShellScripts(unittest.TestCase):
         try:
             proc.wait(timeout=5.0)
             while select.select([master], [], [], 0.05)[0]:
-                if not os.read(master, 4096):
+                try:
+                    if not os.read(master, 4096):
+                        break
+                except OSError:
                     break
         finally:
             os.close(master)

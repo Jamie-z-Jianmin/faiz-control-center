@@ -189,6 +189,15 @@ class TestInspectReport(unittest.TestCase):
             self.assertEqual(parsed["telemetry"]["total_tasks"], 2)
             self.assertNotIn("secretToken123456", raw_json)
 
+            # Portable SQLite fallback must work cleanly even when external telemetry.py is absent (CI runners)
+            payload_fallback = collect_inspect_payload(
+                store,
+                telemetry_db=db_path,
+                telemetry_script=root / "missing_telemetry.py",
+                now_epoch=float(now_ep),
+            )
+            self.assertEqual(payload_fallback["telemetry"], payload["telemetry"])
+
     def test_empty_cache_and_cli_inspect_subcommand(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             fake_home = Path(tmp)

@@ -19,8 +19,8 @@ JQ_BIN="/usr/bin/jq"
 
 _file_mtime() {
     local f="$1"
-    [ -s "$f" ] || { echo 0; return; }
-    stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0
+    [ -e "$f" ] || { echo 0; return; }
+    stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0
 }
 
 _sniff_term_width() {
@@ -126,15 +126,22 @@ if [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ]; then
     [ -e "$cloud_stamp" ] && stat_files+=("$cloud_stamp")
 fi
 if [ "${#stat_files[@]}" -gt 0 ]; then
-    stat_out=$(stat -f $'%m\t%z\t%N' "${stat_files[@]}" 2>/dev/null || stat -c $'%Y\t%s\t%n' "${stat_files[@]}" 2>/dev/null || true)
+    stat_out=$(stat -c $'%Y\t%s\t%n' "${stat_files[@]}" 2>/dev/null || stat -f $'%m\t%z\t%N' "${stat_files[@]}" 2>/dev/null || true)
     while IFS=$'\t' read -r sm sz sn; do
+        [ -n "$sn" ] || continue
+        [[ "$sm" =~ ^[0-9]+$ ]] || continue
         case "$sn" in
             "$USAGE_CACHE") u_mt="$sm" ;;
             "$CLOUD_CACHE") c_mt="$sm" ;;
-            "$t_path") t_mtime="$sm"; t_sz="$sz" ;;
             "$SPEED_CACHE") s_mtime="$sm" ;;
             "$pty_stamp") p_mt="$sm" ;;
             "$cloud_stamp") c_st_mt="$sm" ;;
+            *)
+                if [ -n "$t_path" ] && [ "$sn" = "$t_path" ]; then
+                    t_mtime="$sm"
+                    [[ "$sz" =~ ^[0-9]+$ ]] && t_sz="$sz"
+                fi
+                ;;
         esac
     done <<< "$stat_out"
 fi

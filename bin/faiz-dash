@@ -184,7 +184,7 @@ case "${1:-}" in
         for name in usage_snapshot.json cloud_snapshot.json; do
             f="$CACHE_DIR/$name"
             if [ -f "$f" ]; then
-                mtime=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo "$now")
+                mtime=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now")
                 echo "cache $name: age=$((now - mtime))s ($f)"
             else
                 echo "cache $name: missing"

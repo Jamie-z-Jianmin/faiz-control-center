@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import sqlite3
 import time
 from typing import Any, Optional
 
@@ -90,32 +91,88 @@ def _clean_log_tail(raw_tail: str) -> str:
     return core
 
 
+def _read_telemetry_sqlite_readonly(db_path: Path) -> Optional[dict[str, Any]]:
+    if not db_path.exists():
+        return None
+    empty_metrics: dict[str, Any] = {
+        "total_tasks": 0,
+        "completed_tasks": 0,
+        "failed_tasks": 0,
+        "success_rate_percent": 100.0,
+        "avg_duration_sec": 0.0,
+        "avg_turns_per_task": 1.0,
+        "total_tools_called": 0,
+        "t1_interceptions_count": 0,
+        "top_tools": [],
+    }
+    conn: Optional[sqlite3.Connection] = None
+    try:
+        conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        tables = {
+            r[0]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        if "tasks" not in tables or "tool_invocations" not in tables:
+            return empty_metrics
+        total_tasks = int(conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] or 0)
+        completed_tasks = int(conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'COMPLETED'").fetchone()[0] or 0)
+        failed_tasks = int(conn.execute("SELECT COUNT(*) FROM tasks WHERE status = 'FAILED'").fetchone()[0] or 0)
+        avg_duration = float(conn.execute("SELECT AVG(duration_ms) FROM tasks WHERE status = 'COMPLETED'").fetchone()[0] or 0.0)
+        avg_turns = float(conn.execute("SELECT AVG(total_turns) FROM tasks WHERE status = 'COMPLETED'").fetchone()[0] or 1.0)
+        total_tools = int(conn.execute("SELECT COUNT(*) FROM tool_invocations").fetchone()[0] or 0)
+        intercepted_tools = int(conn.execute("SELECT COUNT(*) FROM tool_invocations WHERE intercepted_by_t1 = 1").fetchone()[0] or 0)
+        top_tools = conn.execute(
+            "SELECT tool_name, COUNT(*) as count FROM tool_invocations GROUP BY tool_name ORDER BY count DESC LIMIT 5"
+        ).fetchall()
+        success_rate = (completed_tasks / total_tasks * 100.0) if total_tasks > 0 else 100.0
+        return sanitize_for_json(
+            {
+                "total_tasks": total_tasks,
+                "completed_tasks": completed_tasks,
+                "failed_tasks": failed_tasks,
+                "success_rate_percent": round(success_rate, 1),
+                "avg_duration_sec": round(avg_duration / 1000.0, 2),
+                "avg_turns_per_task": round(avg_turns, 1),
+                "total_tools_called": total_tools,
+                "t1_interceptions_count": intercepted_tools,
+                "top_tools": [{"tool": r["tool_name"], "calls": r["count"]} for r in top_tools],
+            }
+        )
+    except Exception:
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def read_telemetry_summary(
     *,
     telemetry_db: Optional[Path] = None,
     script_path: Optional[Path] = None,
 ) -> Optional[dict[str, Any]]:
-    """Safely load macro APM metrics in read-only mode from `~/.agents/scripts/telemetry.py`."""
+    """Safely load macro APM metrics in read-only mode from `telemetry.py` or `telemetry.db`."""
     target_script = script_path or _default_telemetry_script()
-    if not target_script.exists():
-        return None
-    try:
-        spec = importlib.util.spec_from_file_location("_faiz_telemetry_ro", str(target_script))
-        if spec is None or spec.loader is None:
-            return None
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        orig_db = getattr(mod, "DB_PATH", None)
+    if target_script.exists():
         try:
-            if telemetry_db is not None:
-                setattr(mod, "DB_PATH", str(telemetry_db))
-            metrics = mod.get_summary_metrics(readonly=True)
-            return sanitize_for_json(metrics) if isinstance(metrics, dict) else None
-        finally:
-            if telemetry_db is not None and orig_db is not None:
-                setattr(mod, "DB_PATH", orig_db)
-    except Exception:
-        return None
+            spec = importlib.util.spec_from_file_location("_faiz_telemetry_ro", str(target_script))
+            if spec is not None and spec.loader is not None:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                orig_db = getattr(mod, "DB_PATH", None)
+                try:
+                    if telemetry_db is not None:
+                        setattr(mod, "DB_PATH", str(telemetry_db))
+                    metrics = mod.get_summary_metrics(readonly=True)
+                    if isinstance(metrics, dict):
+                        return sanitize_for_json(metrics)
+                finally:
+                    if telemetry_db is not None and orig_db is not None:
+                        setattr(mod, "DB_PATH", orig_db)
+        except Exception:
+            pass
+    db_path = telemetry_db or (Path.home() / ".agents" / "telemetry.db")
+    return _read_telemetry_sqlite_readonly(db_path)
 
 
 def collect_inspect_payload(
