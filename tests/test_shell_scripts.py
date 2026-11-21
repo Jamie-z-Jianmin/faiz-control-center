@@ -180,30 +180,35 @@ class TestShellScripts(unittest.TestCase):
             res_60 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_60, capture_output=True, check=True)
             out_60 = res_60.stdout.decode("utf-8", errors="replace")
             ansi_lines_60 = out_60.splitlines()
-            self.assertEqual(len(ansi_lines_60), 6)
+            self.assertEqual(len(ansi_lines_60), 8)
             self.assertIn("─", ansi_lines_60[0])
-            self.assertIn("╌", ansi_lines_60[3])
+            self.assertEqual(ansi_lines_60[2], "")
+            self.assertIn("╌", ansi_lines_60[4])
+            self.assertEqual(ansi_lines_60[6], "")
             self.assertIn("35;45;64", out_60)
             self.assertNotIn("27;52;38", out_60)
             self.assertNotIn("60;50;26", out_60)
             self.assertNotIn("64;30;31", out_60)
             plain_60 = re.sub(r"\x1b\[[0-9;]*m", "", out_60).splitlines()
-            self.assertEqual(len({len(ln) for ln in plain_60}), 1)
+            self.assertEqual(len({len(ln) for ln in plain_60 if ln}), 1)
             self.assertEqual(len(plain_60[1]), 58)
-            self.assertIn("▸ 180t/s", plain_60[2])
-            self.assertIn("Gemini 57%·88%", plain_60[2])
+            self.assertIn("▸ 180t/s", plain_60[3])
+            self.assertIn("Gemini 57%·88%", plain_60[3])
 
             # 46-col narrow Rex sidebar (FAIZ_TERM_WIDTH=46): stays strictly 4x2 aligned and uniform slate-blue
             env_46 = {**env, "FAIZ_TERM_WIDTH": "46"}
             res_46 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_46, capture_output=True, check=True)
             out_46 = res_46.stdout.decode("utf-8", errors="replace")
             ansi_lines_46 = out_46.splitlines()
-            self.assertEqual(len(ansi_lines_46), 6)
+            self.assertEqual(len(ansi_lines_46), 8)
+            self.assertEqual(ansi_lines_46[2], "")
+            self.assertIn("╌", ansi_lines_46[4])
+            self.assertEqual(ansi_lines_46[6], "")
             self.assertNotIn("27;52;38", out_46)
             plain_46 = re.sub(r"\x1b\[[0-9;]*m", "", out_46).splitlines()
-            self.assertEqual(len({len(ln) for ln in plain_46}), 1)
+            self.assertEqual(len({len(ln) for ln in plain_46 if ln}), 1)
             self.assertLessEqual(len(plain_46[1]), 44)
-            self.assertIn("Gem 57%·88%", plain_46[2])
+            self.assertIn("Gem 57%·88%", plain_46[3])
 
             # Per-capsule independent color override via capsule_colors (and CLI config command)
             cli_env = {**env, "PYTHONPATH": str(REPO_ROOT / "src")}
@@ -218,8 +223,8 @@ class TestShellScripts(unittest.TestCase):
             cap_lines = out_cap.splitlines()
             self.assertIn("35;45;64", cap_lines[1])
             self.assertNotIn("27;52;38", cap_lines[1])
-            self.assertIn("27;52;38", cap_lines[2])   # Gemini overridden to green
-            self.assertIn("64;30;31", cap_lines[5])   # Queue overridden to red
+            self.assertIn("27;52;38", cap_lines[3])   # Gemini overridden to green
+            self.assertIn("64;30;31", cap_lines[7])   # Queue overridden to red
 
             # Explicit density="expanded" with custom row_colors on 95-col split wraps cleanly onto 2 frosted rows (Blue / Green)
             (fake_home / ".agents" / "statusline_config.json").write_text(
@@ -858,14 +863,16 @@ esac
             res_60 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_60, capture_output=True, check=True)
             out_60 = res_60.stdout.decode("utf-8", errors="replace")
             lines_60 = out_60.splitlines()
-            self.assertEqual(len(lines_60), 6)
+            self.assertEqual(len(lines_60), 8)
             self.assertNotIn("27;52;38", out_60)
             self.assertNotIn("64;30;31", out_60)
             plain_60_lines = re.sub(r"\x1b\[[0-9;]*m", "", out_60).splitlines()
-            self.assertEqual(len({len(ln) for ln in plain_60_lines}), 1)
+            self.assertEqual(len({len(ln) for ln in plain_60_lines if ln}), 1)
             self.assertEqual(len(plain_60_lines[1]), 58)
-            self.assertIn("Gemini 0%·17%", plain_60_lines[2])
-            self.assertIn("Arg 9.4%!·Cla 70·85%", plain_60_lines[4])
+            self.assertEqual(plain_60_lines[2], "")
+            self.assertIn("Gemini 0%·17%", plain_60_lines[3])
+            self.assertEqual(plain_60_lines[6], "")
+            self.assertIn("Arg 9.4%!·Cla 70·85%", plain_60_lines[5])
 
             # Appending turns incrementally updates single-session Burn to 2-decimal M
             with t_file.open("a", encoding="utf-8") as fh:

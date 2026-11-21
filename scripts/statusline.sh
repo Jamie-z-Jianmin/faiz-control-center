@@ -283,12 +283,16 @@ jq_args+=(--argjson p_tbl "$p_tbl")
 
 case "$cfg_raw" in
     *'"zh"'*)
-        JQ_DISP_LEN='def disp_len: if (test("[\u2e80-\u9fff\uac00-\ud7af\uf900-\uffff]") | not) then length else explode | reduce .[] as $cp (0; . + (if ($cp >= 11904 and $cp <= 40959) or ($cp >= 4352 and $cp <= 4447) or ($cp >= 44032 and $cp <= 55203) or ($cp >= 63744 and $cp <= 65500) then 2 else 1 end)) end;' ;;
+        JQ_DISP_LEN='def disp_len: if (test("[\u2e80-\u9fff\uac00-\ud7af\uf900-\uffff]") | not) then length else explode | reduce .[] as $cp (0; . + (if ($cp >= 11904 and $cp <= 40959) or ($cp >= 4352 and $cp <= 4447) or ($cp >= 44032 and $cp <= 55203) or ($cp >= 63744 and $cp <= 65500) then 2 else 1 end)) end;'
+        lang_tbl='{"ctx":"上下文 ","c":"缓","sync":"配额同步中","context":"上下文 ","cold":" 冷却","cache":"缓存 ","live_tag":" · 实时","speed":"速率 ","warn_pro_c":" (Pro低)","warn_pro_2":" (Pro低)","warn_pro":" (Pro低)","thro_c":" (限)","thro_2":" (限)","thro":" (限)","session":"本话 ","burn":"消耗 ","full":"满额","soon":"重刷中","reset":"重置 ","sess":"会话 ","online":"在线","mleft_p":" · 余","mleft_s":"分","on":"在线","idle":"停机","stale":"失联!","lim_rate":"限流 · Rate","lim":"限流","to_net":"超时 · Net","to":"超时","gce_s":"台","queue":"队列 ","run":"运行","fail":"失败","r_s":"运","f_s":"败","q_idle":"空闲","done":"完成","m_unit":"分","unv":"未核","q_tag":"待·","f_tag":"败","nocache":"无缓存","rclimit":"rc限流","degraded":"云降级","live":"实时","ago":"前"}' ;;
     *)
-        JQ_DISP_LEN='def disp_len: length;' ;;
+        JQ_DISP_LEN='def disp_len: length;'
+        lang_tbl='{"ctx":"Ctx ","c":"C","sync":"Quota syncing","context":"Context ","cold":" cold","cache":"Cache ","live_tag":" · Live","speed":"Speed ","warn_pro_c":"!","warn_pro_2":" Pro!","warn_pro":" (Pro!)","thro_c":"!","thro_2":" Low","thro":" (Low)","session":"Session ","burn":"Burn ","full":"Full","soon":"Soon","reset":"Reset ","sess":"Sess ","online":"ONLINE","mleft_p":" · ","mleft_s":"m left","on":"ON","idle":"IDLE","stale":"STALE!","lim_rate":"LIMIT · Rate","lim":"LIMIT","to_net":"TIMEOUT · Net","to":"TIMEOUT","gce_s":"","queue":"Queue ","run":" Run","fail":" Fail","r_s":"R","f_s":"F","q_idle":"Idle","done":" Done","m_unit":"m","unv":"UNV","q_tag":"Q·","f_tag":"F","nocache":"no-cache","rclimit":"rc-limit","degraded":"degraded","live":"live","ago":" ago"}' ;;
 esac
+jq_args+=(--argjson L "$lang_tbl")
 
-JQ_FILTER="${JQ_DISP_LEN}"'
+if [ "$has_tc" = "false" ] || [[ "$cfg_raw" == *'"custom"'* ]] || [[ "$cfg_raw" == *'"minimal"'* ]]; then
+    JQ_COL_HELPERS='
   def ansi16($name):
     ({
       "cyan": "\u001b[36m", "green": "\u001b[32m", "yellow": "\u001b[33m",
@@ -317,8 +321,59 @@ JQ_FILTER="${JQ_DISP_LEN}"'
       warn_bg: "78;62;38", warn_fg: slot_rgb($custom_cols.warn // "yellow"), warn_acc: slot_rgb($custom_cols.warn // "yellow"),
       alert_bg: "84;42;52", alert_fg: slot_rgb($custom_cols.alert // "red"), alert_acc: slot_rgb($custom_cols.alert // "red"),
       muted_bg: "49;55;68", muted_fg: slot_rgb($custom_cols.muted // "gray"), muted_acc: slot_rgb($custom_cols.muted // "gray")
-    } end;
+    } end;'
+else
+    JQ_COL_HELPERS='
+  def ansi16($name): "";
+  def theme_palette($t; $custom_cols): $p_tbl;'
+fi
 
+if [ "$has_tc" = "true" ] && [[ "$cfg_raw" != *'"ghost"'* ]] && [[ "$cfg_raw" != *'"powerline"'* ]] && [[ "$cfg_raw" != *'"pill"'* ]] && [[ "$cfg_raw" != *'"minimal"'* ]]; then
+    JQ_RENDER_CAP='
+  def render_capsule($it; $sp; $acc_sp; $pal; $style; $tc; $tint_val):
+    repeat_str(" "; ($it.pad // 0)) as $pad_str |
+    ($sp[4]) as $gbg |
+    ($sp[5]) as $glbl |
+    (if $tint_val then $acc_sp[2] else $sp[6] end) as $vcol |
+    ($it.parts | map("\u001b[38;2;\(if .r == "lbl" then $glbl elif .r == "acc" then $acc_sp[2] else $vcol end)m\(.t)") | join("")) as $body |
+    (if $it.icon != "" then "\u001b[38;2;\($acc_sp[2])m\($it.icon) " else "" end) as $ipfx |
+    "\u001b[38;2;\($gbg)m\ue0b6\u001b[48;2;\($gbg)m \($ipfx)\($body)\($pad_str) \u001b[0;38;2;\($gbg)m\ue0b4\(rst)";'
+else
+    JQ_RENDER_CAP='
+  def render_capsule($it; $sp; $acc_sp; $pal; $style; $tc; $tint_val):
+    item_plain($it) as $plain |
+    repeat_str(" "; ($it.pad // 0)) as $pad_str |
+    if ($style == "minimal") or ($tc | not) then
+      (if $sp[3] != "" then "\($sp[3])\($plain)\(rst)" else $plain end) + $pad_str
+    elif $style == "ghost" then
+      ($pal.ghost_brd // "107;114;128") as $brd |
+      (if $tint_val then $acc_sp[2] else $pal.glass_val end) as $vcol |
+      (
+        ($it.parts | map(
+          "\u001b[38;2;\(if .r == "lbl" then $pal.glass_lbl elif .r == "acc" then $acc_sp[2] else $vcol end)m\(.t)"
+        ) | join(""))
+      ) as $body |
+      (if $it.icon != "" then "\u001b[38;2;\($acc_sp[2])m\($it.icon) " else "" end) as $ipfx |
+      "\u001b[38;2;\($brd)m[\($ipfx)\($body)\($pad_str)\u001b[38;2;\($brd)m]\(rst)"
+    elif $style == "capsule" then
+      ($sp[4]) as $gbg |
+      ($sp[5]) as $glbl |
+      (if $tint_val then $acc_sp[2] else $sp[6] end) as $vcol |
+      (
+        ($it.parts | map(
+          "\u001b[38;2;\(if .r == "lbl" then $glbl elif .r == "acc" then $acc_sp[2] else $vcol end)m\(.t)"
+        ) | join(""))
+      ) as $body |
+      (if $it.icon != "" then "\u001b[38;2;\($acc_sp[2])m\($it.icon) " else "" end) as $ipfx |
+      "\u001b[38;2;\($gbg)m\ue0b6\u001b[48;2;\($gbg)m \($ipfx)\($body)\($pad_str) \u001b[0;38;2;\($gbg)m\ue0b4\(rst)"
+    elif $style == "powerline" then
+      "\u001b[38;2;\($sp[0])m\ue0b6\u001b[48;2;\($sp[0]);38;2;\($sp[1])m \($plain)\($pad_str) \u001b[0;38;2;\($sp[0])m\ue0b4\(rst)"
+    else
+      "\u001b[48;2;\($sp[0]);38;2;\($sp[2])m▎\u001b[38;2;\($sp[1])m \($plain)\($pad_str) \(rst)"
+    end;'
+fi
+
+JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   def rst: "\u001b[0m";
   def fmt1:
     (((. * 10) | round) / 10) as $v |
@@ -373,38 +428,7 @@ JQ_FILTER="${JQ_DISP_LEN}"'
 
   def cap_width($it; $style):
     (item_plain($it) | disp_len) + ($it.pad // 0) + (if $style == "minimal" then 0 elif $style == "ghost" then 2 else 4 end);
-
-  def render_capsule($it; $sp; $acc_sp; $pal; $style; $tc; $tint_val):
-    item_plain($it) as $plain |
-    repeat_str(" "; ($it.pad // 0)) as $pad_str |
-    if ($style == "minimal") or ($tc | not) then
-      (if $sp[3] != "" then "\($sp[3])\($plain)\(rst)" else $plain end) + $pad_str
-    elif $style == "ghost" then
-      ($pal.ghost_brd // "107;114;128") as $brd |
-      (if $tint_val then $acc_sp[2] else $pal.glass_val end) as $vcol |
-      (
-        ($it.parts | map(
-          "\u001b[38;2;\(if .r == "lbl" then $pal.glass_lbl elif .r == "acc" then $acc_sp[2] else $vcol end)m\(.t)"
-        ) | join(""))
-      ) as $body |
-      (if $it.icon != "" then "\u001b[38;2;\($acc_sp[2])m\($it.icon) " else "" end) as $ipfx |
-      "\u001b[38;2;\($brd)m[\($ipfx)\($body)\($pad_str)\u001b[38;2;\($brd)m]\(rst)"
-    elif $style == "capsule" then
-      ($sp[4]) as $gbg |
-      ($sp[5]) as $glbl |
-      (if $tint_val then $acc_sp[2] else $sp[6] end) as $vcol |
-      (
-        ($it.parts | map(
-          "\u001b[38;2;\(if .r == "lbl" then $glbl elif .r == "acc" then $acc_sp[2] else $vcol end)m\(.t)"
-        ) | join(""))
-      ) as $body |
-      (if $it.icon != "" then "\u001b[38;2;\($acc_sp[2])m\($it.icon) " else "" end) as $ipfx |
-      "\u001b[38;2;\($gbg)m\ue0b6\u001b[48;2;\($gbg)m \($ipfx)\($body)\($pad_str) \u001b[0;38;2;\($gbg)m\ue0b4\(rst)"
-    elif $style == "powerline" then
-      "\u001b[38;2;\($sp[0])m\ue0b6\u001b[48;2;\($sp[0]);38;2;\($sp[1])m \($plain)\($pad_str) \u001b[0;38;2;\($sp[0])m\ue0b4\(rst)"
-    else
-      "\u001b[48;2;\($sp[0]);38;2;\($sp[2])m▎\u001b[38;2;\($sp[1])m \($plain)\($pad_str) \(rst)"
-    end;
+'"${JQ_RENDER_CAP}"'
 
   def pack_rows($items; $max_w; $do_wrap; $sep_w; $style):
     if ($items | length) == 0 then []
@@ -608,7 +632,7 @@ JQ_COMPACT='
           (if $cp >= 90 then "alert" elif $cp >= 75 then "warn" else "ctx" end) as $cs |
           [
             (if $ind == "ring" then ring($cp) else "" end),
-            ([{t: (if $lang == "en" then "Ctx " else "上下文 " end), r: "lbl"}, {t: "\($cp)%", r: "val"}] + (if $ind == "bar" then [{t: " \(bar6($cp))", r: "acc"}] else [] end)),
+            ([{t: $L.ctx, r: "lbl"}, {t: "\($cp)%", r: "val"}] + (if $ind == "bar" then [{t: " \(bar6($cp))", r: "acc"}] else [] end)),
             $cs
           ]
         else
@@ -622,7 +646,7 @@ JQ_COMPACT='
         $base1[1] +
         (if $m_cache and ($cache_hit != null) then
           (if ($base1[1] | length) > 0 then [{t: "·", r: "lbl"}] else [] end) +
-          [{t: (if $lang == "en" then "C" else "缓" end), r: "lbl"}, {t: "\($cache_hit | round)%", r: "val"}] +
+          [{t: $L.c, r: "lbl"}, {t: "\($cache_hit | round)%", r: "val"}] +
           (if ($cache_age != null and $cache_age >= 240) then [{t: "!", r: "acc"}] else [] end)
          else [] end) +
         (if $m_speed and ($live_tps != null) and ($live_tps > 0) then
@@ -643,7 +667,7 @@ JQ_COMPACT='
            else "base" end) as $q_slot |
           . + [{cap_id: "gemini", icon: (if $ind == "ring" and $pro5 != null then ring($pro5) else "" end), parts: $p2_parts, slot: $q_slot, tint: ($q_slot != "base")}]
         else
-          . + [{cap_id: "gemini", icon: "○", parts: [{t: (if $lang == "en" then "Quota syncing" else "配额同步中" end), r: "lbl"}], slot: "muted", tint: false}]
+          . + [{cap_id: "gemini", icon: "○", parts: [{t: $L.sync, r: "lbl"}], slot: "muted", tint: false}]
         end
       else . end
     ) |
@@ -684,15 +708,14 @@ JQ_COMPACT='
 
 JQ_MAIN='
   [] |
-  # 1. Context capsule (agy-capsule overload thresholds: >=75 warn, >=90 alert)
   if $m_ctx then
     if $ctx != null then
       (($ctx | round)) as $cp |
       (if $cp >= 90 then "alert" elif $cp >= 75 then "warn" else "ctx" end) as $ctx_slot |
       (if ($ind == "bar") or $wide_rich then
-        [{t: (if $wide_rich then (if $lang == "en" then "Context " else "上下文 " end) elif $lang == "en" then "Ctx " else "上下文 " end), r: "lbl"}, {t: "\($cp)% ", r: "val"}, {t: bar6($cp), r: "acc"}]
+        [{t: (if $wide_rich then $L.context else $L.ctx end), r: "lbl"}, {t: "\($cp)% ", r: "val"}, {t: bar6($cp), r: "acc"}]
        else
-        [{t: (if $lang == "en" then "Ctx " else "上下文 " end), r: "lbl"}, {t: "\($cp)%", r: "val"}]
+        [{t: $L.ctx, r: "lbl"}, {t: "\($cp)%", r: "val"}]
        end) as $c_parts |
       . + [{cap_id: "context", icon: (if $ind == "ring" then ring($cp) else "" end), parts: $c_parts, slot: $ctx_slot, tint: ($cp >= 75)}]
     else
@@ -700,11 +723,10 @@ JQ_MAIN='
     end
   else . end |
 
-  # 2. Prompt Cache Hit & TTL Probe capsule (3m warn / 4m cold alert heuristic)
   if $m_cache and ($cache_hit != null) then
     (
       if ($cache_age != null and $cache_age >= 240) then
-        ["alert", (if $lang == "en" then " cold" else " 冷却" end), true]
+        ["alert", $L.cold, true]
       elif ($cache_age != null and $cache_age >= 180) then
         ["warn", " 3m!", true]
       elif $cache_hit < 50 then
@@ -717,9 +739,9 @@ JQ_MAIN='
       cap_id: "cache",
       icon: (if $ind == "ring" then ring($cache_hit) else "●" end),
       parts: (
-        [{t: (if $lang == "en" then "Cache " else "缓存 " end), r: "lbl"}, {t: "\(pct_str($cache_hit; $short_pct))%", r: "val"}] +
+        [{t: $L.cache, r: "lbl"}, {t: "\(pct_str($cache_hit; $short_pct))%", r: "val"}] +
         (if $cmeta[1] != "" then [{t: $cmeta[1], r: "acc"}]
-         elif $wide_rich and ($cache_age != null) then [{t: (if $lang == "en" then " · Live" else " · 实时" end), r: "lbl"}]
+         elif $wide_rich and ($cache_age != null) then [{t: $L.live_tag, r: "lbl"}]
          else [] end)
       ),
       slot: $cmeta[0],
@@ -727,18 +749,17 @@ JQ_MAIN='
     }]
   else . end |
 
-  # 3. Live Token Rate capsule (<10 alert, 10..24 warn, >=25 ok)
   if $m_speed and ($live_tps != null) and ($live_tps > 0) then
     (if $live_tps < 10 then ["alert", true] elif $live_tps < 25 then ["warn", true] else ["ok", false] end) as $smeta |
     . + [{
       cap_id: "speed",
       icon: "▸",
       parts: (if $wide_rich then
-                [{t: (if $lang == "en" then "Speed " else "速率 " end), r: "lbl"}, {t: "\($live_tps) tok/s", r: "val"}]
+                [{t: $L.speed, r: "lbl"}, {t: "\($live_tps) tok/s", r: "val"}]
               elif $narrow_4x2 then
                 [{t: "\($live_tps)t/s", r: "val"}]
               elif $use_adaptive_2row then
-                [{t: (if $lang == "en" then "Speed " else "速率 " end), r: "lbl"}, {t: "\($live_tps)t/s", r: "val"}]
+                [{t: $L.speed, r: "lbl"}, {t: "\($live_tps)t/s", r: "val"}]
               else
                 [{t: "\($live_tps)", r: "val"}, {t: "t/s", r: "lbl"}]
               end),
@@ -747,7 +768,6 @@ JQ_MAIN='
     }]
   else . end |
 
-  # 4. Quota & Argon capsules
   if $m_quota then
     if $pro5 != null or $prowk != null or $arg != null then
       ($use_adaptive_2row and ($eff_cols < 155) and ($q_prec != "int")) as $compact_gem_lbl |
@@ -797,8 +817,8 @@ JQ_MAIN='
             (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
            end)
          else [{t: (if ($use_adaptive_2row and $cla_show and ($wide_rich | not)) then "Arg " else "Argon " end), r: "lbl"}, {t: "--", r: "val"}] end) +
-        (if $gate == "WARN_PRO" then [{t: (if $lang == "en" then (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then "!" elif $use_adaptive_2row then " Pro!" else " (Pro!)" end) else " (Pro低)" end), r: "acc"}]
-         elif $gate == "THROTTLE_ARGON" then [{t: (if $lang == "en" then (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then "!" elif $use_adaptive_2row then " Low" else " (Low)" end) else " (限)" end), r: "acc"}]
+        (if $gate == "WARN_PRO" then [{t: (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then $L.warn_pro_c elif $use_adaptive_2row then $L.warn_pro_2 else $L.warn_pro end), r: "acc"}]
+         elif $gate == "THROTTLE_ARGON" then [{t: (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then $L.thro_c elif $use_adaptive_2row then $L.thro_2 else $L.thro end), r: "acc"}]
          else [] end) +
         (if ($use_adaptive_2row and $cla_show) then [{t: (if $wide_rich then " · Claude " else "·Cla " end), r: "lbl"}, {t: $cla_val, r: "val"}] else [] end)
       ) as $a_parts |
@@ -826,14 +846,13 @@ JQ_MAIN='
       . + [{
         cap_id: "gemini",
         icon: "○",
-        parts: [{t: (if $lang == "en" then "Quota syncing" else "配额同步中" end), r: "lbl"}],
+        parts: [{t: $L.sync, r: "lbl"}],
         slot: "muted",
         tint: false
       }]
     end
   else . end |
 
-  # 5. Secondary telemetry capsule (Session Token Burn | 5h Quota Reset | CLI Sessions)
   if $m_sess then
     if $sec_metric == "burn" and (($sess_tok != null and $sess_tok > 0) or ($tok1h != null)) then
       (
@@ -853,11 +872,11 @@ JQ_MAIN='
           (if $tok1h >= 1000000 then "\(($tok1h / 1000000) | fmt1)M"
            elif $tok1h >= 1000 then "\(($tok1h / 1000) | round)K"
            else "\($tok1h)" end) as $h1_txt |
-          [{t: (if $lang == "en" then "Session " else "本话 " end), r: "lbl"}, {t: $burn_txt, r: "val"}, {t: " · 1h:\($h1_txt)", r: "lbl"}]
+          [{t: $L.session, r: "lbl"}, {t: $burn_txt, r: "val"}, {t: " · 1h:\($h1_txt)", r: "lbl"}]
         elif $wide_rich and ($sess_tok != null and $sess_tok > 0) then
-          [{t: (if $lang == "en" then "Session " else "本话 " end), r: "lbl"}, {t: $burn_txt, r: "val"}]
+          [{t: $L.session, r: "lbl"}, {t: $burn_txt, r: "val"}]
         else
-          [{t: (if $lang == "en" then "Burn " else "消耗 " end), r: "lbl"}, {t: $burn_txt, r: "val"}]
+          [{t: $L.burn, r: "lbl"}, {t: $burn_txt, r: "val"}]
         end
       ) as $b_parts |
       . + [{
@@ -869,10 +888,10 @@ JQ_MAIN='
       }]
     elif $sec_metric == "reset" and ($reset_ep != null) then
       (
-        if $reset_ep == 0 then (if $lang == "en" then "Full" else "满额" end)
+        if $reset_ep == 0 then $L.full
         else
           ($reset_ep - $now_ts) as $rem |
-          if $rem <= 0 then (if $lang == "en" then "Soon" else "重刷中" end)
+          if $rem <= 0 then $L.soon
           elif $rem >= 3600 then
             (($rem / 3600) | floor) as $rh |
             ((($rem % 3600) / 60) | floor) as $rm |
@@ -884,7 +903,7 @@ JQ_MAIN='
         cap_id: "sessions",
         icon: "↻",
         parts: [
-          {t: (if $lang == "en" then "Reset " else "重置 " end), r: "lbl"},
+          {t: $L.reset, r: "lbl"},
           {t: $rst_txt, r: "val"}
         ],
         slot: "base",
@@ -895,7 +914,7 @@ JQ_MAIN='
         cap_id: "sessions",
         icon: "·",
         parts: [
-          {t: (if $lang == "en" then "Sess " else "会话 " end), r: "lbl"},
+          {t: $L.sess, r: "lbl"},
           {t: (if $use_adaptive_2row then "\($pc) · \($gc // 0)" else "\($pc)·\($gc // 0)" end), r: "val"}
         ],
         slot: "base",
@@ -904,61 +923,59 @@ JQ_MAIN='
     else . end
   else . end |
 
-  # 6. Colab & GCE capsule
   if $m_colab and ($clb != "") and ($clb != "NOT_CONFIGURED") then
     (
       if $clb == "ONLINE" then
-        ["●", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then ((if $lang == "en" then "ONLINE" else "在线" end) + (if $idle != null then (if $lang == "en" then " · \(($idle / 60) | floor)m left" else " · 余\(($idle / 60) | floor)分" end) else "" end)) else ((if $lang == "en" then "ON" else "在线" end) + (if $idle != null then "(\(($idle / 60) | floor)m)" else "" end)) end), r: "val"}], "ok", false]
+        ["●", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then ($L.online + (if $idle != null then "\($L.mleft_p)\(($idle / 60) | floor)\($L.mleft_s)" else "" end)) else ($L.on + (if $idle != null then "(\(($idle / 60) | floor)m)" else "" end)) end), r: "val"}], "ok", false]
       elif $clb == "STOPPED" then
-        ["○", [{t: "Colab ", r: "lbl"}, {t: (if $lang == "en" then "IDLE" else "停机" end), r: "lbl"}], "muted", false]
+        ["○", [{t: "Colab ", r: "lbl"}, {t: $L.idle, r: "lbl"}], "muted", false]
       elif $clb == "STALE_OFFLINE" then
-        ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $lang == "en" then "STALE!" else "失联!" end), r: "acc"}], "alert", true]
+        ["▲", [{t: "Colab ", r: "lbl"}, {t: $L.stale, r: "acc"}], "alert", true]
       elif $clb == "DEGRADED" then
         (if $err_kind == "rate_limit" then
-          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then (if $lang == "en" then "LIMIT · Rate" else "限流 · Rate" end) elif $lang == "en" then "LIMIT" else "限流" end), r: "acc"}], "warn", true]
+          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then $L.lim_rate else $L.lim end), r: "acc"}], "warn", true]
          else
-          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then (if $lang == "en" then "TIMEOUT · Net" else "超时 · Net" end) elif $lang == "en" then "TIMEOUT" else "超时" end), r: "acc"}], "warn", true]
+          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then $L.to_net else $L.to end), r: "acc"}], "warn", true]
          end)
       else
         ["◐", [{t: "Colab ", r: "lbl"}, {t: $clb, r: "acc"}], "warn", true]
       end
     ) as $cm |
-    (if ($gce // 0) > 0 then [{t: (if $lang == "en" then " · GCE:\($gce)" else " · GCE:\($gce)台" end), r: "acc"}] else [] end) as $gce_p |
+    (if ($gce // 0) > 0 then [{t: " · GCE:\($gce)\($L.gce_s)", r: "acc"}] else [] end) as $gce_p |
     (if ($gce // 0) > 0 then "alert" else $cm[2] end) as $c_slot |
     . + [{cap_id: "colab", icon: $cm[0], parts: ($cm[1] + $gce_p), slot: $c_slot, tint: ($cm[3] or (($gce // 0) > 0))}]
   else . end |
 
-  # 7. Mailbox Queue capsule
   if $m_mbox and ($mt != null) and ($clb != "NOT_CONFIGURED") then
     if $m_stale and ($mt == 0) and ($mf == 0) and ($md == 0) then
       . + [{
         cap_id: "mailbox",
         icon: "▲",
-        parts: [{t: (if $lang == "en" then "Queue " else "队列 " end), r: "lbl"}, {t: (if $lang == "en" then "LIMIT" else "限流" end), r: "acc"}],
+        parts: [{t: $L.queue, r: "lbl"}, {t: $L.lim, r: "acc"}],
         slot: "warn",
         tint: true
       }]
     elif $use_adaptive_2row then
       (
         if ($mf // 0) > 0 and $mt > 0 then
-          ["▲", "alert", true, (if $wide_rich then (if $lang == "en" then "\($mt) Run · \($mf) Fail" else "\($mt)运行 · \($mf)失败" end) elif $lang == "en" then "\($mt)R · \($mf)F" else "\($mt)运 · \($mf)败" end)]
+          ["▲", "alert", true, (if $wide_rich then "\($mt)\($L.run) · \($mf)\($L.fail)" else "\($mt)\($L.r_s) · \($mf)\($L.f_s)" end)]
         elif ($mf // 0) > 0 then
-          ["▲", "alert", true, (if $lang == "en" then "\($mf) Fail" else "\($mf)失败" end)]
+          ["▲", "alert", true, "\($mf)\($L.fail)"]
         elif $mt > 0 then
-          ["▸", "ok", false, (if $lang == "en" then "\($mt) Run" else "\($mt)运行" end)]
+          ["▸", "ok", false, "\($mt)\($L.run)"]
         else
-          ["·", "base", false, (if $lang == "en" then "Idle" else "空闲" end)]
+          ["·", "base", false, $L.q_idle]
         end
       ) as $qm2 |
-      (if $wide_rich and ($md > 0) then [{t: (if $lang == "en" then " · \($md) Done" else " · \($md)完成" end), r: "lbl"}]
+      (if $wide_rich and ($md > 0) then [{t: " · \($md)\($L.done)", r: "lbl"}]
        elif $m_fresh and ($max_age >= 180) and ($max_age < 999999) and ((($cloud_ok | not) and ($clb == "DEGRADED")) | not)
-       then [{t: (if $lang == "en" then " · \(($max_age / 60) | floor)m" else " · \(($max_age / 60) | floor)分" end), r: "lbl"}]
+       then [{t: " · \(($max_age / 60) | floor)\($L.m_unit)", r: "lbl"}]
        else [] end) as $inline_age |
       . + [{
         cap_id: "mailbox",
         icon: $qm2[0],
         parts: ([
-          {t: (if $lang == "en" then "Queue " else "队列 " end), r: "lbl"},
+          {t: $L.queue, r: "lbl"},
           {t: $qm2[3], r: (if $qm2[2] then "acc" else "val" end)}
         ] + $inline_age),
         slot: $qm2[1],
@@ -966,14 +983,12 @@ JQ_MAIN='
       }]
     else
       (if ($mf // 0) > 0 then ["alert", true] elif $mu > 0 then ["warn", true] else ["base", false] end) as $qm |
-      (if $lang == "en" then "UNV" else "未核" end) as $unv_tag |
       . + [{
         cap_id: "mailbox",
         icon: (if $qm[1] then "▲" else "" end),
         parts: [
-          {t: (if $lang == "en" then "Queue " else "队列 " end), r: "lbl"},
-          {t: (if $lang == "en" then "\($mt)Q·\($mf // 0)F" + (if $mu > 0 then "·\($mu)\($unv_tag)" else "" end)
-               else "\($mt)待·\($mf // 0)败" + (if $mu > 0 then "·\($mu)\($unv_tag)" else "" end) end), r: (if $qm[1] then "acc" else "val" end)}
+          {t: $L.queue, r: "lbl"},
+          {t: ("\($mt)\($L.q_tag)\($mf // 0)\($L.f_tag)" + (if $mu > 0 then "·\($mu)\($L.unv)" else "" end)), r: (if $qm[1] then "acc" else "val" end)}
         ],
         slot: $qm[0],
         tint: $qm[1]
@@ -981,19 +996,14 @@ JQ_MAIN='
     end
   else . end |
 
-  # 8. Freshness capsule (suppressed in adaptive <155c narrow mode so Row 2 never spills onto an orphan 3rd row)
   if $m_fresh and ($use_adaptive_2row | not) then
     (
-      if $max_age >= 999999 then (if $lang == "en" then "no-cache" else "无缓存" end)
+      if $max_age >= 999999 then $L.nocache
       elif ($cloud_ok | not) and ($clb == "DEGRADED") then
-        (if $err_kind == "rate_limit" then
-          (if $lang == "en" then "rc-limit" else "rc限流" end)
-         else
-          (if $lang == "en" then "degraded" else "云降级" end)
-         end)
-      elif $max_age < 90 then (if $lang == "en" then "live" else "实时" end)
-      elif $max_age < 3600 then "\(($max_age / 60) | floor)m" + (if $lang == "en" then " ago" else "前" end)
-      else "\(($max_age / 3600) | floor)h" + (if $lang == "en" then " ago" else "前" end)
+        (if $err_kind == "rate_limit" then $L.rclimit else $L.degraded end)
+      elif $max_age < 90 then $L.live
+      elif $max_age < 3600 then "\(($max_age / 60) | floor)m\($L.ago)"
+      else "\(($max_age / 3600) | floor)h\($L.ago)"
       end
     ) as $ft |
     . + [{cap_id: "freshness", icon: "", parts: [{t: $ft, r: "lbl"}], slot: "muted", tint: false}]
@@ -1040,12 +1050,13 @@ JQ_TAIL=' |
   (
     if $grid_mode == "4x2" and (($rendered_rows | length) >= 3) then
       (if ($rendered_rows | length) >= 4 then 2 else 1 end) as $split_idx |
-      ($rendered_rows[0:$split_idx] | join("\n")) +
+      (if $line_gap then "\n\n" else "\n" end) as $pair_join |
+      ($rendered_rows[0:$split_idx] | join($pair_join)) +
       (if $line_gap then "\n\($mid_rule)\n" else "\n" end) +
-      ($rendered_rows[$split_idx:] | join("\n"))
+      ($rendered_rows[$split_idx:] | join($pair_join))
     else
       (if $is_matrix and $line_gap then "\n\($mid_rule)\n"
-       elif $line_gap and (($rendered_rows | length) > 1) and (($rendered_rows | length) <= 3) then "\n\n"
+       elif $line_gap and (($rendered_rows | length) > 1) and (($rendered_rows | length) <= 4) then "\n\n"
        else "\n" end) as $row_join |
       ($rendered_rows | join($row_join))
     end
