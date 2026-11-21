@@ -171,6 +171,7 @@ class TestTuiPilot(unittest.IsolatedAsyncioTestCase):
                 app.query_one("#opt-colormode").value = "semantic"  # type: ignore[attr-defined]
                 app.query_one("#opt-quotaprec").value = "1dp"  # type: ignore[attr-defined]
                 app.query_one("#rowcol-0").value = "red"  # type: ignore[attr-defined]
+                app.query_one("#capcol-gemini").value = "green"  # type: ignore[attr-defined]
                 await pilot.pause()
                 self.assertIn("启用模块", str(app.query_one("#sec-modules").render()))
                 self.assertIn("控制中心", str(app.query_one("#sec-control").render()))
@@ -189,6 +190,8 @@ class TestTuiPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(saved["color_mode"], "semantic")
                 self.assertEqual(saved["quota_precision"], "1dp")
                 self.assertEqual(saved["row_colors"][0], "red")
+                self.assertEqual(saved["capsule_colors"]["gemini"], "green")
+                self.assertEqual(saved["capsule_colors"]["context"], "auto")
                 self.assertFalse(saved["top_gap"])
                 self.assertFalse(saved["line_gap"])
                 self.assertFalse(saved["modules"]["speed"])

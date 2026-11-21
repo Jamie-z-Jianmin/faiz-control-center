@@ -21,6 +21,8 @@ VALID_DOCK_RATIOS = (18, 22, 26, 30)
 VALID_MAX_WIDTHS = (0, 80, 90, 100, 120)
 
 MODULE_KEYS = ("context", "cache", "speed", "quota", "sessions", "colab", "mailbox", "freshness")
+CAPSULE_COLOR_KEYS = ("context", "cache", "speed", "gemini", "argon", "sessions", "colab", "mailbox", "freshness")
+VALID_CAPSULE_COLOR_TOKENS = ("auto", "blue", "green", "yellow", "red", "slate", "muted")
 COLOR_SLOTS = ("context", "ok", "warn", "alert", "muted")
 VALID_LANGUAGES = ("en", "zh")
 VALID_STYLES = ("capsule", "ghost", "powerline", "pill", "minimal")
@@ -31,7 +33,7 @@ VALID_THEMES = ("google", "nord", "tokyo_night", "catppuccin", "custom")
 VALID_COLOR_MODES = ("row", "semantic")
 VALID_QUOTA_PRECISIONS = ("exact", "1dp", "int")
 VALID_ROW_COLOR_TOKENS = ("blue", "green", "yellow", "red", "slate", "muted")
-DEFAULT_ROW_COLORS = ["blue", "green", "yellow", "red"]
+DEFAULT_ROW_COLORS = ["blue", "blue", "blue", "blue"]
 VALID_COLORS = (
     "cyan",
     "green",
@@ -89,6 +91,7 @@ DEFAULT_STATUSLINE_CONFIG: dict[str, Any] = {
         "alert": "red",
         "muted": "gray",
     },
+    "capsule_colors": {key: "auto" for key in CAPSULE_COLOR_KEYS},
     "control_center": {
         "side_ratio": DEFAULT_SIDE_RATIO,
         "dock_ratio": DEFAULT_DOCK_RATIO,
@@ -162,6 +165,13 @@ def _normalize_config(raw: dict[str, Any], base_cloud: Optional[dict[str, str]] 
             val = str(cols.get(slot, "")).strip().lower()
             if val in VALID_COLORS:
                 cfg["colors"][slot] = val
+
+    cap_cols = raw.get("capsule_colors")
+    if isinstance(cap_cols, dict):
+        for key in CAPSULE_COLOR_KEYS:
+            val = str(cap_cols.get(key, "")).strip().lower()
+            if val in VALID_CAPSULE_COLOR_TOKENS:
+                cfg["capsule_colors"][key] = val
 
     cloud_raw = raw.get("cloud")
     if isinstance(cloud_raw, dict):

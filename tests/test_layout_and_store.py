@@ -200,7 +200,9 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(cfg["secondary_metric"], "burn")
             self.assertEqual(cfg["theme"], "google")
             self.assertEqual(cfg["color_mode"], "row")
-            self.assertEqual(cfg["row_colors"], ["blue", "green", "yellow", "red"])
+            self.assertEqual(cfg["row_colors"], ["blue", "blue", "blue", "blue"])
+            self.assertEqual(cfg["capsule_colors"]["gemini"], "auto")
+            self.assertEqual(cfg["capsule_colors"]["mailbox"], "auto")
             self.assertTrue(cfg["top_gap"])
             self.assertTrue(cfg["line_gap"])
             self.assertTrue(cfg["auto_wrap"])
@@ -222,6 +224,8 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
             cfg["modules"]["cache"] = False
             cfg["modules"]["sessions"] = False
             cfg["colors"]["context"] = "magenta"
+            cfg["capsule_colors"]["gemini"] = "green"
+            cfg["capsule_colors"]["mailbox"] = "red"
             cfg["control_center"] = {"side_ratio": 32, "dock_ratio": 26}
             save_statusline_config(cfg, cfg_path)
 
@@ -254,6 +258,8 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(reloaded["modules"]["cache"])
             self.assertFalse(reloaded["modules"]["sessions"])
             self.assertEqual(reloaded["colors"]["context"], "magenta")
+            self.assertEqual(reloaded["capsule_colors"]["gemini"], "green")
+            self.assertEqual(reloaded["capsule_colors"]["mailbox"], "red")
 
             import os
 

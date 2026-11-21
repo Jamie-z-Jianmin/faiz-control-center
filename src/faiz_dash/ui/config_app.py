@@ -16,12 +16,14 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Checkbox, Footer, Header, Label, Select, Static
 
 from ..statusline_config import (
+    CAPSULE_COLOR_KEYS,
     COLOR_SLOTS,
     DEFAULT_DOCK_RATIO,
     DEFAULT_SIDE_RATIO,
     DEFAULT_STATUSLINE_CONFIG,
     DEFAULT_STATUSLINE_CONFIG_PATH,
     MODULE_KEYS,
+    VALID_CAPSULE_COLOR_TOKENS,
     VALID_COLORS,
     VALID_DOCK_RATIOS,
     VALID_MAX_WIDTHS,
@@ -68,10 +70,11 @@ I18N: dict[str, dict[str, Any]] = {
         "color_mode_label": "Color Mode:",
         "quota_prec_label": "Quota Precision:",
         "row_labels": ("Row 1 Color:", "Row 2 Color:", "Row 3 Color:"),
+        "sec_capsule_colors": "Per-Capsule Colors (Optional Override)",
         "btn_save": "Save (S)",
         "btn_reset": "Reset Defaults",
         "btn_quit": "Quit (Q)",
-        "preview_hdr": "Live TrueColor Preview (90-col split simulation):",
+        "preview_hdr": "Live TrueColor Preview:",
         "saved_msg": "Saved to {path}",
         "modules": {
             "context": "Context Window %",
@@ -89,6 +92,17 @@ I18N: dict[str, dict[str, Any]] = {
             "warn": "Warning / Throttled",
             "alert": "Error / Failed",
             "muted": "Muted / Idle",
+        },
+        "capsule_colors": {
+            "context": "Context Pill Color",
+            "cache": "Cache Pill Color",
+            "speed": "Speed Pill Color",
+            "gemini": "Gemini Quota Color",
+            "argon": "Argon / Claude Color",
+            "sessions": "Session / Burn Color",
+            "colab": "Colab / GCE Color",
+            "mailbox": "Queue / Mailbox Color",
+            "freshness": "Freshness Tag Color",
         },
     },
     "zh": {
@@ -112,10 +126,11 @@ I18N: dict[str, dict[str, Any]] = {
         "color_mode_label": "上色模式:",
         "quota_prec_label": "配额显示精度:",
         "row_labels": ("第 1 行颜色:", "第 2 行颜色:", "第 3 行颜色:"),
+        "sec_capsule_colors": "独立胶囊配色 (按需覆盖统一底座)",
         "btn_save": "保存生效 (S)",
         "btn_reset": "恢复默认",
         "btn_quit": "退出 (Q)",
-        "preview_hdr": "实时 TrueColor 预览 (90列分屏模拟):",
+        "preview_hdr": "实时 TrueColor 预览:",
         "saved_msg": "已保存至 {path}",
         "modules": {
             "context": "上下文窗口 / Context %",
@@ -133,6 +148,17 @@ I18N: dict[str, dict[str, Any]] = {
             "warn": "预警/限流色 (Warn)",
             "alert": "失败/失联色 (Alert)",
             "muted": "次要/停机色 (Muted)",
+        },
+        "capsule_colors": {
+            "context": "上下文胶囊底色",
+            "cache": "缓存胶囊底色",
+            "speed": "速率胶囊底色",
+            "gemini": "Gemini 配额底色",
+            "argon": "Argon / Claude 底色",
+            "sessions": "消耗 / 会话底色",
+            "colab": "Colab / GCE 底色",
+            "mailbox": "任务队列底色",
+            "freshness": "同步尾标底色",
         },
     },
 }
@@ -329,7 +355,7 @@ class StatuslineConfigApp(App[None]):
                     yield Label(t["density_label"], id="lbl-density", classes="color-label")
                     yield Select(
                         [
-                            ("Auto (Aligned Grid <155c / Full >=155c)", "auto"),
+                            ("Auto (4x2 Narrow / 2x4 Wide)", "auto"),
                             ("Compact (Dense 1-Row)", "compact"),
                             ("Expanded (All Pills)", "expanded"),
                         ],
@@ -408,6 +434,21 @@ class StatuslineConfigApp(App[None]):
                             id=f"col-{slot}",
                             allow_blank=False,
                         )
+                yield Static(t["sec_capsule_colors"], id="sec-capcolors", classes="sec-title")
+                cap_opts = [
+                    ("Auto (Unified)", "auto") if tok == "auto" else (tok.title(), tok)
+                    for tok in VALID_CAPSULE_COLOR_TOKENS
+                ]
+                cur_cap_cols = self.cfg.get("capsule_colors") or {}
+                for cap_key in CAPSULE_COLOR_KEYS:
+                    with Horizontal(classes="color-row"):
+                        yield Label(t["capsule_colors"][cap_key], id=f"lbl-capcol-{cap_key}", classes="color-label")
+                        yield Select(
+                            cap_opts,
+                            value=cur_cap_cols.get(cap_key, "auto"),
+                            id=f"capcol-{cap_key}",
+                            allow_blank=False,
+                        )
         yield Static("", id="preview-box")
         with Horizontal(id="action-row"):
             yield Button(t["btn_save"], variant="primary", id="btn-save")
@@ -446,6 +487,9 @@ class StatuslineConfigApp(App[None]):
         self.query_one("#opt-autodock", Checkbox).label = t["auto_dock"]  # type: ignore[assignment]
         for slot in COLOR_SLOTS:
             self.query_one(f"#lbl-col-{slot}", Label).update(t["colors"][slot])
+        self.query_one("#sec-capcolors", Static).update(t["sec_capsule_colors"])
+        for cap_key in CAPSULE_COLOR_KEYS:
+            self.query_one(f"#lbl-capcol-{cap_key}", Label).update(t["capsule_colors"][cap_key])
         self.query_one("#btn-save", Button).label = t["btn_save"]
         self.query_one("#btn-reset", Button).label = t["btn_reset"]
         self.query_one("#btn-quit", Button).label = t["btn_quit"]
@@ -458,6 +502,10 @@ class StatuslineConfigApp(App[None]):
         colors = {
             slot: str(self.query_one(f"#col-{slot}", Select).value)
             for slot in COLOR_SLOTS
+        }
+        capsule_colors = {
+            cap_key: str(self.query_one(f"#capcol-{cap_key}", Select).value)
+            for cap_key in CAPSULE_COLOR_KEYS
         }
         lang = str(self.query_one("#opt-lang", Select).value)
         style = str(self.query_one("#opt-style", Select).value)
@@ -492,6 +540,7 @@ class StatuslineConfigApp(App[None]):
             "max_width": max_width,
             "modules": modules,
             "colors": colors,
+            "capsule_colors": capsule_colors,
             "control_center": {
                 "side_ratio": side_ratio,
                 "dock_ratio": dock_ratio,
@@ -570,6 +619,8 @@ class StatuslineConfigApp(App[None]):
                 self.query_one(f"#rowcol-{idx}", Select).value = DEFAULT_STATUSLINE_CONFIG["row_colors"][idx]
             for slot in COLOR_SLOTS:
                 self.query_one(f"#col-{slot}", Select).value = self.cfg["colors"][slot]
+            for cap_key in CAPSULE_COLOR_KEYS:
+                self.query_one(f"#capcol-{cap_key}", Select).value = DEFAULT_STATUSLINE_CONFIG["capsule_colors"][cap_key]
             self._apply_i18n(DEFAULT_STATUSLINE_CONFIG["language"])
             self._update_preview()
         elif event.button.id == "btn-quit":

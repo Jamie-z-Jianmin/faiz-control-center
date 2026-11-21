@@ -15,8 +15,10 @@ from .collectors.usage_probe import UsageProbe
 from .gateways.drive import RcloneDriveGateway
 from .inspect_report import collect_inspect_payload, format_inspect_output
 from .statusline_config import (
+    CAPSULE_COLOR_KEYS,
     COLOR_SLOTS,
     MODULE_KEYS,
+    VALID_CAPSULE_COLOR_TOKENS,
     VALID_COLORS,
     VALID_COLOR_MODES,
     VALID_DENSITIES,
@@ -101,6 +103,7 @@ def _run_config_cmd(args: argparse.Namespace) -> int:
             args.enable is not None,
             args.disable is not None,
             args.color is not None,
+            args.capsule_color is not None,
             args.auto_wrap is not None,
             args.max_width is not None,
             args.side_ratio is not None,
@@ -181,6 +184,19 @@ def _run_config_cmd(args: argparse.Namespace) -> int:
             if val not in VALID_COLORS:
                 raise SystemExit(f"Unknown color '{val}' (valid: {', '.join(VALID_COLORS)})")
             cfg["colors"][slot] = val
+    if args.capsule_color:
+        cfg.setdefault("capsule_colors", {k: "auto" for k in CAPSULE_COLOR_KEYS})
+        for pair in args.capsule_color:
+            if "=" not in pair:
+                raise SystemExit(f"Invalid --capsule-color '{pair}', expected capsule=color")
+            cap_key, val = (p.strip().lower() for p in pair.split("=", 1))
+            if cap_key not in CAPSULE_COLOR_KEYS:
+                raise SystemExit(f"Unknown capsule '{cap_key}' (valid: {', '.join(CAPSULE_COLOR_KEYS)})")
+            if val not in VALID_CAPSULE_COLOR_TOKENS:
+                raise SystemExit(
+                    f"Unknown capsule color '{val}' (valid: {', '.join(VALID_CAPSULE_COLOR_TOKENS)})"
+                )
+            cfg["capsule_colors"][cap_key] = val
 
     saved = save_statusline_config(cfg)
     saved["auto_dock"] = read_auto_dock_enabled()
@@ -236,6 +252,11 @@ def build_parser() -> argparse.ArgumentParser:
     cfg_p.add_argument("--enable", help="Comma-separated modules to enable")
     cfg_p.add_argument("--disable", help="Comma-separated modules to disable")
     cfg_p.add_argument("--color", action="append", help="Set slot=color (repeatable)")
+    cfg_p.add_argument(
+        "--capsule-color",
+        action="append",
+        help="Override individual capsule color capsule=color (auto|blue|green|yellow|red|slate|muted)",
+    )
 
     insp_p = sub.add_parser("inspect", help="Print a non-interactive diagnostic report for in-chat inspection")
     insp_p.add_argument("--live", action="store_true", help="Run live quota/cloud/mailbox probes before formatting")

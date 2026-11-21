@@ -435,29 +435,37 @@ JQ_FILTER="${JQ_DISP_LEN}"'
       )
     end;
 
+  def pack_grid($items; $cols; $max_w; $sep_w; $style; $expand_w):
+    ((($items | length) + $cols - 1) / $cols | floor) as $nrows |
+    [range(0; $nrows) as $r | $items[($r * $cols):(($r + 1) * $cols)]] as $grows |
+    [
+      range(0; $cols) as $c |
+      ([range(0; $nrows) as $r | if $c < ($grows[$r] | length) then cap_width($grows[$r][$c]; $style) else 0 end] | max)
+    ] as $raw_ws |
+    (($raw_ws | add) + (($cols - 1) * $sep_w)) as $total_w |
+    if $total_w <= $max_w then
+      (if $expand_w then expand_col_ws($raw_ws; $max_w; $sep_w) else $raw_ws end) as $col_ws |
+      [
+        $grows[] as $gr |
+        [range(0; ($gr | length)) as $c | $gr[$c] + {pad: ($col_ws[$c] - cap_width($gr[$c]; $style))}]
+      ]
+    else null end;
+
   def pack_matrix_rows($items; $max_w; $do_wrap; $sep_w; $style; $expand_w):
     if ($items | length) < 5 or ($do_wrap | not) or $max_w <= 0 then
-      pack_rows($items; $max_w; $do_wrap; $sep_w; $style)
+      {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
     else
-      ((($items | length) + 1) / 2 | floor) as $cols |
-      ($items[0:$cols]) as $r0 |
-      ($items[$cols:]) as $r1 |
-      [
-        range(0; $cols) as $c |
-        [
-          (if $c < ($r0 | length) then cap_width($r0[$c]; $style) else 0 end),
-          (if $c < ($r1 | length) then cap_width($r1[$c]; $style) else 0 end)
-        ] | max
-      ] as $raw_ws |
-      (($raw_ws | add) + (($cols - 1) * $sep_w)) as $total_w |
-      if $total_w <= $max_w then
-        (if $expand_w then expand_col_ws($raw_ws; $max_w; $sep_w) else $raw_ws end) as $col_ws |
-        [
-          [range(0; ($r0 | length)) as $c | $r0[$c] + {pad: ($col_ws[$c] - cap_width($r0[$c]; $style))}],
-          [range(0; ($r1 | length)) as $c | $r1[$c] + {pad: ($col_ws[$c] - cap_width($r1[$c]; $style))}]
-        ]
+      ((($items | length) + 1) / 2 | floor) as $cols2 |
+      pack_grid($items; $cols2; $max_w; $sep_w; $style; $expand_w) as $g2 |
+      if $g2 != null then
+        {mode: "2x4", rows: $g2}
       else
-        pack_rows($items; $max_w; $do_wrap; $sep_w; $style)
+        pack_grid($items; 2; $max_w; $sep_w; $style; ($max_w >= 54)) as $g4 |
+        if $g4 != null then
+          {mode: "4x2", rows: $g4}
+        else
+          {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
+        end
       end
     end;
 
@@ -474,7 +482,8 @@ JQ_FILTER="${JQ_DISP_LEN}"'
   ($raw_cfg.theme // "google") as $theme |
   ($raw_cfg.color_mode // "row") as $color_mode |
   ($raw_cfg.quota_precision // "exact") as $q_prec |
-  (($raw_cfg.row_colors // ["blue", "green", "yellow", "red"]) | if length > 0 then . else ["blue", "green", "yellow", "red"] end) as $row_colors |
+  (($raw_cfg.row_colors // ["blue", "blue", "blue", "blue"]) | if length > 0 then . else ["blue", "blue", "blue", "blue"] end) as $row_colors |
+  ($raw_cfg.capsule_colors // {}) as $cap_cols |
   (if ($raw_cfg.top_gap == false) then false else true end) as $top_gap |
   (if ($raw_cfg.line_gap == false) then false else true end) as $line_gap |
   (if $has_tc then $req_style else "minimal" end) as $eff_style |
@@ -483,8 +492,9 @@ JQ_FILTER="${JQ_DISP_LEN}"'
   ($density == "compact") as $use_compact |
   ($density == "auto") as $use_adaptive_2row |
   ($use_adaptive_2row and ($eff_cols >= 155)) as $wide_rich |
+  ($use_adaptive_2row and ($eff_cols < 86)) as $narrow_4x2 |
   ($use_adaptive_2row and ($eff_cols <= 95)) as $short_pct |
-  ($eff_cols < 82) as $tight_quota |
+  ($eff_cols < 86) as $tight_quota |
 
   ($raw_cfg.modules // {}) as $m |
   (if ($m.context == false) then false else true end) as $m_ctx |
@@ -619,7 +629,7 @@ JQ_COMPACT='
           [{t: "·", r: "lbl"}, {t: "\($live_tps)", r: "val"}, {t: "t/s", r: "lbl"}]
          else [] end)
       ) as $p1_parts |
-      if ($p1_parts | length) > 0 then . + [{icon: $base1[0], parts: $p1_parts, slot: $base1[2], tint: ($base1[2] != "ctx")}] else . end
+      if ($p1_parts | length) > 0 then . + [{cap_id: "context", icon: $base1[0], parts: $p1_parts, slot: $base1[2], tint: ($base1[2] != "ctx")}] else . end
     ) |
     (
       if $m_quota then
@@ -631,9 +641,9 @@ JQ_COMPACT='
           (if $gate == "WARN_PRO" or ($pro5 != null and $pro5 < 20) then "alert"
            elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($pro5 != null and $pro5 < 40) then "warn"
            else "base" end) as $q_slot |
-          . + [{icon: (if $ind == "ring" and $pro5 != null then ring($pro5) else "" end), parts: $p2_parts, slot: $q_slot, tint: ($q_slot != "base")}]
+          . + [{cap_id: "gemini", icon: (if $ind == "ring" and $pro5 != null then ring($pro5) else "" end), parts: $p2_parts, slot: $q_slot, tint: ($q_slot != "base")}]
         else
-          . + [{icon: "○", parts: [{t: (if $lang == "en" then "Quota syncing" else "配额同步中" end), r: "lbl"}], slot: "muted", tint: false}]
+          . + [{cap_id: "gemini", icon: "○", parts: [{t: (if $lang == "en" then "Quota syncing" else "配额同步中" end), r: "lbl"}], slot: "muted", tint: false}]
         end
       else . end
     ) |
@@ -669,7 +679,7 @@ JQ_COMPACT='
       elif $clb == "ONLINE" then ["●", "ok", false]
       else ["·", "base", false] end
     ) as $p3_meta |
-    (if ($p3_parts | length) > 0 then . + [{icon: $p3_meta[0], parts: $p3_parts, slot: $p3_meta[1], tint: $p3_meta[2]}] else . end)
+    (if ($p3_parts | length) > 0 then . + [{cap_id: "colab", icon: $p3_meta[0], parts: $p3_parts, slot: $p3_meta[1], tint: $p3_meta[2]}] else . end)
 '
 
 JQ_MAIN='
@@ -684,9 +694,9 @@ JQ_MAIN='
        else
         [{t: (if $lang == "en" then "Ctx " else "上下文 " end), r: "lbl"}, {t: "\($cp)%", r: "val"}]
        end) as $c_parts |
-      . + [{icon: (if $ind == "ring" then ring($cp) else "" end), parts: $c_parts, slot: $ctx_slot, tint: ($cp >= 75)}]
+      . + [{cap_id: "context", icon: (if $ind == "ring" then ring($cp) else "" end), parts: $c_parts, slot: $ctx_slot, tint: ($cp >= 75)}]
     else
-      . + [{icon: "◈", parts: [{t: "Faiz", r: "val"}], slot: "ctx", tint: false}]
+      . + [{cap_id: "context", icon: "◈", parts: [{t: "Faiz", r: "val"}], slot: "ctx", tint: false}]
     end
   else . end |
 
@@ -704,6 +714,7 @@ JQ_MAIN='
       end
     ) as $cmeta |
     . + [{
+      cap_id: "cache",
       icon: (if $ind == "ring" then ring($cache_hit) else "●" end),
       parts: (
         [{t: (if $lang == "en" then "Cache " else "缓存 " end), r: "lbl"}, {t: "\(pct_str($cache_hit; $short_pct))%", r: "val"}] +
@@ -720,9 +731,12 @@ JQ_MAIN='
   if $m_speed and ($live_tps != null) and ($live_tps > 0) then
     (if $live_tps < 10 then ["alert", true] elif $live_tps < 25 then ["warn", true] else ["ok", false] end) as $smeta |
     . + [{
+      cap_id: "speed",
       icon: "▸",
       parts: (if $wide_rich then
                 [{t: (if $lang == "en" then "Speed " else "速率 " end), r: "lbl"}, {t: "\($live_tps) tok/s", r: "val"}]
+              elif $narrow_4x2 then
+                [{t: "\($live_tps)t/s", r: "val"}]
               elif $use_adaptive_2row then
                 [{t: (if $lang == "en" then "Speed " else "速率 " end), r: "lbl"}, {t: "\($live_tps)t/s", r: "val"}]
               else
@@ -736,13 +750,13 @@ JQ_MAIN='
   # 4. Quota & Argon capsules
   if $m_quota then
     if $pro5 != null or $prowk != null or $arg != null then
-      ($use_adaptive_2row and ($eff_cols < 155) and ($q_prec != "int") and ($tight_quota | not)) as $compact_gem_lbl |
+      ($use_adaptive_2row and ($eff_cols < 155) and ($q_prec != "int")) as $compact_gem_lbl |
       (if ($cla_tight and $cla_show and $q_prec != "int") then "1dp" else $q_prec end) as $gem_prec |
       (
         if $compact_gem_lbl then
           (if $pro5 != null then
-            [{t: "Gemini ", r: "lbl"}, {t: "\(quota_str($pro5; $gem_prec; $tight_quota))%", r: "val"}]
-           else [{t: "Gemini ", r: "lbl"}, {t: "--", r: "val"}] end) +
+            [{t: (if ($narrow_4x2 and ($eff_cols < 50)) then "Gem " else "Gemini " end), r: "lbl"}, {t: "\(quota_str($pro5; $gem_prec; $tight_quota))%", r: "val"}]
+           else [{t: (if ($narrow_4x2 and ($eff_cols < 50)) then "Gem " else "Gemini " end), r: "lbl"}, {t: "--", r: "val"}] end) +
           (if $prowk != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($prowk; $gem_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
         else
           (if $wide_rich and ($reset_ep != null) and ($reset_ep > 0) then
@@ -768,6 +782,7 @@ JQ_MAIN='
        elif ($pro5 != null and $pro5 < 40) then "warn"
        else "base" end) as $g_slot |
       . + [{
+        cap_id: "gemini",
         icon: (if $ind == "ring" and $pro5 != null then ring($pro5) else "" end),
         parts: $g_parts,
         slot: $g_slot,
@@ -776,7 +791,7 @@ JQ_MAIN='
       (
         (if $arg != null then
           (if ($cla_tight and $cla_show and $q_prec != "int") then
-            [{t: "Arg ", r: "lbl"}, {t: "\($arg | fmt1)", r: "val"}]
+            [{t: "Arg ", r: "lbl"}, {t: (if $narrow_4x2 then (if $eff_cols < 50 then "\($arg | round)%" else "\($arg | fmt1)%" end) else "\($arg | fmt1)" end), r: "val"}]
            else
             [{t: (if ($use_adaptive_2row and $cla_show and ($wide_rich | not)) then "Arg " else "Argon " end), r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
             (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
@@ -791,6 +806,7 @@ JQ_MAIN='
        elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 40) then "warn"
        else "base" end) as $a_slot |
       . + [{
+        cap_id: "argon",
         icon: (if $a_slot != "base" then "▲" elif $ind == "ring" and $arg != null then ring($arg) else "" end),
         parts: $a_parts,
         slot: $a_slot,
@@ -799,6 +815,7 @@ JQ_MAIN='
       (if ($cla_show and ($use_adaptive_2row | not)) then
         (if ($cla_min != null and $cla_min < 20) then "alert" elif ($cla_min != null and $cla_min < 40) then "warn" else "base" end) as $cl_slot |
         . + [{
+          cap_id: "argon",
           icon: (if $ind == "ring" and $cla_min != null then ring($cla_min) else "" end),
           parts: [{t: "Claude ", r: "lbl"}, {t: $cla_val, r: "val"}],
           slot: $cl_slot,
@@ -807,6 +824,7 @@ JQ_MAIN='
        else . end)
     else
       . + [{
+        cap_id: "gemini",
         icon: "○",
         parts: [{t: (if $lang == "en" then "Quota syncing" else "配额同步中" end), r: "lbl"}],
         slot: "muted",
@@ -820,7 +838,7 @@ JQ_MAIN='
     if $sec_metric == "burn" and (($sess_tok != null and $sess_tok > 0) or ($tok1h != null)) then
       (
         if ($sess_tok != null and $sess_tok > 0) then
-          if $sess_tok >= 1000000 then "\(($sess_tok / 1000000) | fmt2)M"
+          if $sess_tok >= 1000000 then "\(($sess_tok / 1000000) | (if ($narrow_4x2 and ($eff_cols < 50)) then fmt1 else fmt2 end))M"
           elif $sess_tok >= 1000 then "\(($sess_tok / 1000) | fmt1)K"
           else "\($sess_tok)" end
         else
@@ -843,6 +861,7 @@ JQ_MAIN='
         end
       ) as $b_parts |
       . + [{
+        cap_id: "sessions",
         icon: "◆",
         parts: $b_parts,
         slot: "base",
@@ -862,6 +881,7 @@ JQ_MAIN='
         end
       ) as $rst_txt |
       . + [{
+        cap_id: "sessions",
         icon: "↻",
         parts: [
           {t: (if $lang == "en" then "Reset " else "重置 " end), r: "lbl"},
@@ -872,6 +892,7 @@ JQ_MAIN='
       }]
     elif ($pc != null) then
       . + [{
+        cap_id: "sessions",
         icon: "·",
         parts: [
           {t: (if $lang == "en" then "Sess " else "会话 " end), r: "lbl"},
@@ -904,13 +925,14 @@ JQ_MAIN='
     ) as $cm |
     (if ($gce // 0) > 0 then [{t: (if $lang == "en" then " · GCE:\($gce)" else " · GCE:\($gce)台" end), r: "acc"}] else [] end) as $gce_p |
     (if ($gce // 0) > 0 then "alert" else $cm[2] end) as $c_slot |
-    . + [{icon: $cm[0], parts: ($cm[1] + $gce_p), slot: $c_slot, tint: ($cm[3] or (($gce // 0) > 0))}]
+    . + [{cap_id: "colab", icon: $cm[0], parts: ($cm[1] + $gce_p), slot: $c_slot, tint: ($cm[3] or (($gce // 0) > 0))}]
   else . end |
 
   # 7. Mailbox Queue capsule
   if $m_mbox and ($mt != null) and ($clb != "NOT_CONFIGURED") then
     if $m_stale and ($mt == 0) and ($mf == 0) and ($md == 0) then
       . + [{
+        cap_id: "mailbox",
         icon: "▲",
         parts: [{t: (if $lang == "en" then "Queue " else "队列 " end), r: "lbl"}, {t: (if $lang == "en" then "LIMIT" else "限流" end), r: "acc"}],
         slot: "warn",
@@ -933,6 +955,7 @@ JQ_MAIN='
        then [{t: (if $lang == "en" then " · \(($max_age / 60) | floor)m" else " · \(($max_age / 60) | floor)分" end), r: "lbl"}]
        else [] end) as $inline_age |
       . + [{
+        cap_id: "mailbox",
         icon: $qm2[0],
         parts: ([
           {t: (if $lang == "en" then "Queue " else "队列 " end), r: "lbl"},
@@ -945,6 +968,7 @@ JQ_MAIN='
       (if ($mf // 0) > 0 then ["alert", true] elif $mu > 0 then ["warn", true] else ["base", false] end) as $qm |
       (if $lang == "en" then "UNV" else "未核" end) as $unv_tag |
       . + [{
+        cap_id: "mailbox",
         icon: (if $qm[1] then "▲" else "" end),
         parts: [
           {t: (if $lang == "en" then "Queue " else "队列 " end), r: "lbl"},
@@ -972,7 +996,7 @@ JQ_MAIN='
       else "\(($max_age / 3600) | floor)h" + (if $lang == "en" then " ago" else "前" end)
       end
     ) as $ft |
-    . + [{icon: "", parts: [{t: $ft, r: "lbl"}], slot: "muted", tint: false}]
+    . + [{cap_id: "freshness", icon: "", parts: [{t: $ft, r: "lbl"}], slot: "muted", tint: false}]
   else . end
 '
 
@@ -980,8 +1004,10 @@ JQ_TAIL=' |
   (if ($eff_style == "minimal") then " | " elif $wide_rich then "  " elif ($use_compact or $use_adaptive_2row) then " " else "  " end) as $sep |
   ($sep | disp_len) as $sep_w |
   (if $use_adaptive_2row then pack_matrix_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style; $wide_rich)
-   else pack_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style) end) as $rows |
-  ($use_adaptive_2row and (($rows | length) == 2)) as $is_matrix |
+   else {mode: "flow", rows: pack_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style)} end) as $grid_res |
+  ($grid_res.mode) as $grid_mode |
+  ($grid_res.rows) as $rows |
+  ($grid_mode == "2x4" or $grid_mode == "4x2") as $is_matrix |
   [
     range(0; ($rows | length)) as $ri |
     ($rows[$ri]) as $row |
@@ -993,7 +1019,11 @@ JQ_TAIL=' |
     (
       [
         $row[] as $it |
-        (if $row_slot != "" then $row_slot else $it.slot end) as $use_slot |
+        ($cap_cols[$it.cap_id // ""] // "auto") as $cap_tok |
+        (if ($cap_tok != "auto") and ($cap_tok != "") then row_token_to_slot($cap_tok)
+         elif $color_mode == "semantic" then $it.slot
+         elif $row_slot != "" then $row_slot
+         else $it.slot end) as $use_slot |
         slot_style($pal; $use_slot; $c16) as $sp |
         slot_style($pal; $it.slot; $c16) as $acc_sp |
         render_capsule($it; $sp; $acc_sp; $pal; $eff_style; $has_tc; ($it.tint and ($is_matrix or $color_mode == "semantic")))
@@ -1007,10 +1037,19 @@ JQ_TAIL=' |
   ) as $grid_w |
   (if $has_tc then "\u001b[38;2;54;59;69m" + repeat_str("─"; $grid_w) + rst else repeat_str("-"; $grid_w) end) as $top_rule |
   (if $has_tc then "\u001b[38;2;54;59;69m" + repeat_str("╌"; $grid_w) + rst else repeat_str("-"; $grid_w) end) as $mid_rule |
-  (if $is_matrix and $line_gap then "\n\($mid_rule)\n"
-   elif $line_gap and (($rendered_rows | length) > 1) and (($rendered_rows | length) <= 3) then "\n\n"
-   else "\n" end) as $row_join |
-  ($rendered_rows | join($row_join)) as $body |
+  (
+    if $grid_mode == "4x2" and (($rendered_rows | length) >= 3) then
+      (if ($rendered_rows | length) >= 4 then 2 else 1 end) as $split_idx |
+      ($rendered_rows[0:$split_idx] | join("\n")) +
+      (if $line_gap then "\n\($mid_rule)\n" else "\n" end) +
+      ($rendered_rows[$split_idx:] | join("\n"))
+    else
+      (if $is_matrix and $line_gap then "\n\($mid_rule)\n"
+       elif $line_gap and (($rendered_rows | length) > 1) and (($rendered_rows | length) <= 3) then "\n\n"
+       else "\n" end) as $row_join |
+      ($rendered_rows | join($row_join))
+    end
+  ) as $body |
   if $is_matrix and $top_gap and ($body != "") then "\($top_rule)\n\($body)"
   elif $top_gap and (($rendered_rows | length) == 1) and ($body != "") then "\n\($body)"
   else $body end
