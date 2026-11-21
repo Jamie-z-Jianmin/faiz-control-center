@@ -332,12 +332,16 @@ if [ "$has_tc" = "true" ] && [[ "$cfg_raw" != *'"ghost"'* ]] && [[ "$cfg_raw" !=
     JQ_RENDER_CAP='
   def render_capsule($it; $sp; $acc_sp; $pal; $style; $tc; $tint_val):
     repeat_str(" "; ($it.pad // 0)) as $pad_str |
-    ($sp[4]) as $gbg |
     ($sp[5]) as $glbl |
     (if $tint_val then $acc_sp[2] else $sp[6] end) as $vcol |
     ($it.parts | map("\u001b[38;2;\(if .r == "lbl" then $glbl elif .r == "acc" then $acc_sp[2] else $vcol end)m\(.t)") | join("")) as $body |
     (if $it.icon != "" then "\u001b[38;2;\($acc_sp[2])m\($it.icon) " else "" end) as $ipfx |
-    "\u001b[38;2;\($gbg)m\ue0b6\u001b[48;2;\($gbg)m \($ipfx)\($body)\($pad_str) \u001b[0;38;2;\($gbg)m\ue0b4\(rst)";'
+    if $style == "outline" then
+      "\u001b[38;2;\($sp[7])m[ \($ipfx)\($body)\($pad_str)\u001b[38;2;\($sp[7])m ]\(rst)"
+    else
+      ($sp[4]) as $gbg |
+      "\u001b[38;2;\($gbg)m\ue0b6\u001b[48;2;\($gbg)m \($ipfx)\($body)\($pad_str) \u001b[0;38;2;\($gbg)m\ue0b4\(rst)"
+    end;'
 else
     JQ_RENDER_CAP='
   def render_capsule($it; $sp; $acc_sp; $pal; $style; $tc; $tint_val):
@@ -345,6 +349,12 @@ else
     repeat_str(" "; ($it.pad // 0)) as $pad_str |
     if ($style == "minimal") or ($tc | not) then
       (if $sp[3] != "" then "\($sp[3])\($plain)\(rst)" else $plain end) + $pad_str
+    elif $style == "outline" then
+      ($sp[5]) as $glbl |
+      (if $tint_val then $acc_sp[2] else $sp[6] end) as $vcol |
+      ($it.parts | map("\u001b[38;2;\(if .r == "lbl" then $glbl elif .r == "acc" then $acc_sp[2] else $vcol end)m\(.t)") | join("")) as $body |
+      (if $it.icon != "" then "\u001b[38;2;\($acc_sp[2])m\($it.icon) " else "" end) as $ipfx |
+      "\u001b[38;2;\($sp[7])m[ \($ipfx)\($body)\($pad_str)\u001b[38;2;\($sp[7])m ]\(rst)"
     elif $style == "ghost" then
       ($pal.ghost_brd // "107;114;128") as $brd |
       (if $tint_val then $acc_sp[2] else $pal.glass_val end) as $vcol |
@@ -412,12 +422,12 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
     }[$tok] // "base");
 
   def slot_style($pal; $slot; $c16):
-    if $slot == "ctx" then [$pal.ctx_bg, $pal.ctx_fg, $pal.ctx_acc, $c16.context, ($pal.ctx_gbg // $pal.ctx_bg), ($pal.ctx_glbl // $pal.glass_lbl), ($pal.ctx_gval // $pal.glass_val)]
-    elif $slot == "ok" then [$pal.ok_bg, $pal.ok_fg, $pal.ok_acc, $c16.ok, ($pal.ok_gbg // $pal.ok_bg), ($pal.ok_glbl // $pal.glass_lbl), ($pal.ok_gval // $pal.glass_val)]
-    elif $slot == "warn" then [$pal.warn_bg, $pal.warn_fg, $pal.warn_acc, $c16.warn, ($pal.warn_gbg // $pal.warn_bg), ($pal.warn_glbl // $pal.glass_lbl), ($pal.warn_gval // $pal.glass_val)]
-    elif $slot == "alert" then [$pal.alert_bg, $pal.alert_fg, $pal.alert_acc, $c16.alert, ($pal.alert_gbg // $pal.alert_bg), ($pal.alert_glbl // $pal.glass_lbl), ($pal.alert_gval // $pal.glass_val)]
-    elif $slot == "muted" then [$pal.muted_bg, $pal.muted_fg, $pal.muted_acc, $c16.muted, ($pal.muted_gbg // $pal.muted_bg), ($pal.muted_glbl // $pal.glass_lbl), ($pal.muted_gval // $pal.glass_val)]
-    else [$pal.base_bg, $pal.base_fg, $pal.base_acc, "", ($pal.base_gbg // $pal.base_bg), ($pal.base_glbl // $pal.glass_lbl), ($pal.base_gval // $pal.glass_val)]
+    if $slot == "ctx" then [$pal.ctx_bg, $pal.ctx_fg, $pal.ctx_acc, $c16.context, ($pal.ctx_gbg // $pal.ctx_bg), ($pal.ctx_glbl // $pal.glass_lbl), ($pal.ctx_gval // $pal.glass_val), "84;108;150"]
+    elif $slot == "ok" then [$pal.ok_bg, $pal.ok_fg, $pal.ok_acc, $c16.ok, ($pal.ok_gbg // $pal.ok_bg), ($pal.ok_glbl // $pal.glass_lbl), ($pal.ok_gval // $pal.glass_val), "78;132;98"]
+    elif $slot == "warn" then [$pal.warn_bg, $pal.warn_fg, $pal.warn_acc, $c16.warn, ($pal.warn_gbg // $pal.warn_bg), ($pal.warn_glbl // $pal.glass_lbl), ($pal.warn_gval // $pal.glass_val), "158;134;72"]
+    elif $slot == "alert" then [$pal.alert_bg, $pal.alert_fg, $pal.alert_acc, $c16.alert, ($pal.alert_gbg // $pal.alert_bg), ($pal.alert_glbl // $pal.glass_lbl), ($pal.alert_gval // $pal.glass_val), "162;82;84"]
+    elif $slot == "muted" then [$pal.muted_bg, $pal.muted_fg, $pal.muted_acc, $c16.muted, ($pal.muted_gbg // $pal.muted_bg), ($pal.muted_glbl // $pal.glass_lbl), ($pal.muted_gval // $pal.glass_val), "92;99;112"]
+    else [$pal.base_bg, $pal.base_fg, $pal.base_acc, "", ($pal.base_gbg // $pal.base_bg), ($pal.base_glbl // $pal.glass_lbl), ($pal.base_gval // $pal.glass_val), "84;108;150"]
     end;
 
   def repeat_str($ch; $n):
@@ -1011,13 +1021,14 @@ JQ_MAIN='
 '
 
 JQ_TAIL=' |
-  (if ($eff_style == "minimal") then " | " elif $wide_rich then "  " elif ($use_compact or $use_adaptive_2row) then " " else "  " end) as $sep |
+  (if ($eff_style == "minimal") then " | " elif $wide_rich or ($narrow_4x2 and ($eff_cols >= 50)) then "  " elif ($use_compact or $use_adaptive_2row) then " " else "  " end) as $sep |
   ($sep | disp_len) as $sep_w |
   (if $use_adaptive_2row then pack_matrix_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style; $wide_rich)
    else {mode: "flow", rows: pack_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style)} end) as $grid_res |
   ($grid_res.mode) as $grid_mode |
   ($grid_res.rows) as $rows |
   ($grid_mode == "2x4" or $grid_mode == "4x2") as $is_matrix |
+  (if $eff_style == "capsule" and ($grid_mode == "4x2") then "outline" else $eff_style end) as $render_style |
   [
     range(0; ($rows | length)) as $ri |
     ($rows[$ri]) as $row |
@@ -1036,7 +1047,7 @@ JQ_TAIL=' |
          else $it.slot end) as $use_slot |
         slot_style($pal; $use_slot; $c16) as $sp |
         slot_style($pal; $it.slot; $c16) as $acc_sp |
-        render_capsule($it; $sp; $acc_sp; $pal; $eff_style; $has_tc; ($it.tint and ($is_matrix or $color_mode == "semantic")))
+        render_capsule($it; $sp; $acc_sp; $pal; $render_style; $has_tc; ($it.tint and ($is_matrix or $color_mode == "semantic")))
       ] | join($sep)
     )
   ] as $rendered_rows |
@@ -1050,7 +1061,7 @@ JQ_TAIL=' |
   (
     if $grid_mode == "4x2" and (($rendered_rows | length) >= 3) then
       (if ($rendered_rows | length) >= 4 then 2 else 1 end) as $split_idx |
-      (if $line_gap then "\n\n" else "\n" end) as $pair_join |
+      (if ($line_gap and ($render_style != "outline") and ($render_style != "ghost") and ($render_style != "minimal")) then "\n\n" else "\n" end) as $pair_join |
       ($rendered_rows[0:$split_idx] | join($pair_join)) +
       (if $line_gap then "\n\($mid_rule)\n" else "\n" end) +
       ($rendered_rows[$split_idx:] | join($pair_join))
@@ -1061,7 +1072,7 @@ JQ_TAIL=' |
       ($rendered_rows | join($row_join))
     end
   ) as $body |
-  if $is_matrix and $top_gap and ($body != "") then "\($top_rule)\n\($body)"
+  if ($grid_mode == "2x4") and $top_gap and ($body != "") then "\($top_rule)\n\($body)"
   elif $top_gap and (($rendered_rows | length) == 1) and ($body != "") then "\n\($body)"
   else $body end
 '

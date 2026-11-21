@@ -175,40 +175,36 @@ class TestShellScripts(unittest.TestCase):
             # Reset config to default density="auto" for narrow 4x2 checks
             (fake_home / ".agents" / "statusline_config.json").write_text("{}", encoding="utf-8")
 
-            # Explicit 58-col narrow split (FAIZ_TERM_WIDTH=60) with density="auto": strict 4x2 matrix, uniform slate-blue
+            # Explicit 58-col narrow split (FAIZ_TERM_WIDTH=60) with density="auto": tight 5-line 4x2 slate-blue outline grid
             env_60 = {**env, "FAIZ_TERM_WIDTH": "60"}
             res_60 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_60, capture_output=True, check=True)
             out_60 = res_60.stdout.decode("utf-8", errors="replace")
             ansi_lines_60 = out_60.splitlines()
-            self.assertEqual(len(ansi_lines_60), 8)
-            self.assertIn("─", ansi_lines_60[0])
-            self.assertEqual(ansi_lines_60[2], "")
-            self.assertIn("╌", ansi_lines_60[4])
-            self.assertEqual(ansi_lines_60[6], "")
-            self.assertIn("35;45;64", out_60)
-            self.assertNotIn("27;52;38", out_60)
-            self.assertNotIn("60;50;26", out_60)
-            self.assertNotIn("64;30;31", out_60)
+            self.assertEqual(len(ansi_lines_60), 5)
+            self.assertIn("╌", ansi_lines_60[2])
+            self.assertIn("84;108;150", out_60)
+            self.assertNotIn("35;45;64", out_60)
+            self.assertNotIn("78;132;98", out_60)
+            self.assertNotIn("162;82;84", out_60)
             plain_60 = re.sub(r"\x1b\[[0-9;]*m", "", out_60).splitlines()
-            self.assertEqual(len({len(ln) for ln in plain_60 if ln}), 1)
-            self.assertEqual(len(plain_60[1]), 58)
-            self.assertIn("▸ 180t/s", plain_60[3])
-            self.assertIn("Gemini 57%·88%", plain_60[3])
+            self.assertEqual(len({len(ln) for ln in plain_60}), 1)
+            self.assertEqual(len(plain_60[0]), 58)
+            self.assertIn("]  [", plain_60[0])
+            self.assertIn("[ ▸ 180t/s", plain_60[1])
+            self.assertIn("[ ◑ Gemini 57%·88%", plain_60[1])
 
-            # 46-col narrow Rex sidebar (FAIZ_TERM_WIDTH=46): stays strictly 4x2 aligned and uniform slate-blue
+            # 46-col narrow Rex sidebar (FAIZ_TERM_WIDTH=46): stays strictly 5-line 4x2 aligned slate-blue outline
             env_46 = {**env, "FAIZ_TERM_WIDTH": "46"}
             res_46 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_46, capture_output=True, check=True)
             out_46 = res_46.stdout.decode("utf-8", errors="replace")
             ansi_lines_46 = out_46.splitlines()
-            self.assertEqual(len(ansi_lines_46), 8)
-            self.assertEqual(ansi_lines_46[2], "")
-            self.assertIn("╌", ansi_lines_46[4])
-            self.assertEqual(ansi_lines_46[6], "")
-            self.assertNotIn("27;52;38", out_46)
+            self.assertEqual(len(ansi_lines_46), 5)
+            self.assertIn("╌", ansi_lines_46[2])
+            self.assertNotIn("78;132;98", out_46)
             plain_46 = re.sub(r"\x1b\[[0-9;]*m", "", out_46).splitlines()
-            self.assertEqual(len({len(ln) for ln in plain_46 if ln}), 1)
-            self.assertLessEqual(len(plain_46[1]), 44)
-            self.assertIn("Gem 57%·88%", plain_46[3])
+            self.assertEqual(len({len(ln) for ln in plain_46}), 1)
+            self.assertLessEqual(len(plain_46[0]), 44)
+            self.assertIn("[ ◑ Gem 57%·88%", plain_46[1])
 
             # Per-capsule independent color override via capsule_colors (and CLI config command)
             cli_env = {**env, "PYTHONPATH": str(REPO_ROOT / "src")}
@@ -221,10 +217,10 @@ class TestShellScripts(unittest.TestCase):
             res_cap = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_60, capture_output=True, check=True)
             out_cap = res_cap.stdout.decode("utf-8", errors="replace")
             cap_lines = out_cap.splitlines()
-            self.assertIn("35;45;64", cap_lines[1])
-            self.assertNotIn("27;52;38", cap_lines[1])
-            self.assertIn("27;52;38", cap_lines[3])   # Gemini overridden to green
-            self.assertIn("64;30;31", cap_lines[7])   # Queue overridden to red
+            self.assertIn("84;108;150", cap_lines[0])
+            self.assertNotIn("78;132;98", cap_lines[0])
+            self.assertIn("78;132;98", cap_lines[1])   # Gemini overridden to green border
+            self.assertIn("162;82;84", cap_lines[4])   # Queue overridden to red border
 
             # Explicit density="expanded" with custom row_colors on 95-col split wraps cleanly onto 2 frosted rows (Blue / Green)
             (fake_home / ".agents" / "statusline_config.json").write_text(
@@ -858,21 +854,20 @@ esac
             self.assertIn("Argon 9.43%! · Claude 70.35%·85.17%", plain_180_lines[3])
             self.assertIn("Queue 2 Fail", plain_180_lines[3])
 
-            # At 60 columns (4x2 narrow matrix), merges Arg·Cla with % and renders concise Gemini without rainbow colors
+            # At 60 columns (5-line 4x2 narrow outline matrix), merges Arg·Cla with % and renders concise Gemini without rainbow fills
             env_60 = {**env, "FAIZ_TERM_WIDTH": "60"}
             res_60 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_60, capture_output=True, check=True)
             out_60 = res_60.stdout.decode("utf-8", errors="replace")
             lines_60 = out_60.splitlines()
-            self.assertEqual(len(lines_60), 8)
+            self.assertEqual(len(lines_60), 5)
             self.assertNotIn("27;52;38", out_60)
             self.assertNotIn("64;30;31", out_60)
+            self.assertIn("84;108;150", out_60)
             plain_60_lines = re.sub(r"\x1b\[[0-9;]*m", "", out_60).splitlines()
-            self.assertEqual(len({len(ln) for ln in plain_60_lines if ln}), 1)
-            self.assertEqual(len(plain_60_lines[1]), 58)
-            self.assertEqual(plain_60_lines[2], "")
-            self.assertIn("Gemini 0%·17%", plain_60_lines[3])
-            self.assertEqual(plain_60_lines[6], "")
-            self.assertIn("Arg 9.4%!·Cla 70·85%", plain_60_lines[5])
+            self.assertEqual(len({len(ln) for ln in plain_60_lines}), 1)
+            self.assertEqual(len(plain_60_lines[0]), 58)
+            self.assertIn("[ ○ Gemini 0%·17%", plain_60_lines[1])
+            self.assertIn("[ ▲ Arg 9.4%!·Cla 70·85%", plain_60_lines[3])
 
             # Appending turns incrementally updates single-session Burn to 2-decimal M
             with t_file.open("a", encoding="utf-8") as fh:
