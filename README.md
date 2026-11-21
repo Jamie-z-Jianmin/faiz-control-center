@@ -15,12 +15,12 @@ English | [简体中文](README.zh-CN.md)
 ## Highlights
 
 - **Exact `/usage` Quota Parity (`21.36% · 51.66%`)**: Captures live 5-hour & weekly remaining limits via an isolated PTY `/usage` probe (`flock`-guarded, `rfind()` frame settle to prevent TUI repaint tearing) with **activity-aware 45s refresh** when active turns burn quota (180s when idle).
-- **Sub-80ms Pure Bash + `jq` StatusLine**: Never blocks prompt rendering. Features a **90-col 4x2 aligned matrix** on split panes, single-row expansion on wide terminals (`>=155` cols), `Apple_Terminal` 16-color auto-fallback, and zero-noise hiding when no cloud remote is configured.
+- **Sub-80ms Pure Bash + `jq` StatusLine**: Never blocks prompt rendering. Features a unified **deep slate-blue** palette with a 4-tier responsive matrix: full-label **wide `2×4` glass spread** (`>=155` cols), compact 4-line **`2×4` glass** (`88–154` cols, with cold-tag compaction rescue), tight **5-line `4×2` slate-blue `[ ... ]` outline** (`46–86` cols), plus `Apple_Terminal` 16-color fallback and zero-noise cloud hiding.
 - **Prompt Cache Hit & Live Token Speed (`t/s`)**: Reads only the trailing tail of the active session `transcript.jsonl` to surface Cache Hit %, 3m/4m TTL cooldown alerts, and real-time output generation speed (`t/s`).
 - **Zero-Clutter On-Demand Inspection**:
   - **In-chat Diagnostic Bubble (`/faiz-dash` / `faiz-dash inspect`)**: Outputs a clean Markdown summary of all quota buckets, reset countdowns, 24h per-model token burn, cloud/drive backoff state, mailbox items, and read-only APM telemetry without occupying terminal width.
   - **On-Demand Rex Sidebar (`faiz-dash side`)**: Toggles a 28% vertical Textual sidebar in Rex (`--focus=false`) on demand (`q` or `faiz-dash side` to dismiss). Defaults to no permanent dock (`faiz-dash off`).
-- **Bilingual Settings Studio (`faiz-dash config`)**: Interactive `en`/`zh` Textual config editor with 5 visual styles (`capsule`, `powerline`, `pill`, `ghost`, `minimal`), themes (`google`, `nord`, `tokyo_night`, `catppuccin`, `custom`), `ring`/`bar` indicators, quota precision (`exact` / `1dp` / `int`), and live preview.
+- **Bilingual Settings Studio (`faiz-dash config`)**: Interactive `en`/`zh` Textual config editor with 5 visual styles (`capsule`, `powerline`, `pill`, `ghost`, `minimal`), 5 themes (`google`, `nord`, `tokyo_night`, `catppuccin`, `custom`), **per-capsule color overrides (`capsule_colors`)** (`blue`, `green`, `yellow`, `red`, `slate`, `muted`, `auto`), row uniform palettes, `ring`/`bar` indicators, quota precision (`exact` / `1dp` / `int`), Rex split ratios, and live preview.
 - **Optional Cloud & Worker Swarm Extension**: Seamlessly monitors Colab runtime heartbeats, 60-minute idle timers, GCE Spot instances, `rclone` Drive quota (with persistent exponential rate-limit backoff), and async mailbox job verification when `rclone.conf` is configured.
 
 ---
@@ -110,7 +110,7 @@ faiz-dash config          # Open interactive settings TUI with live preview
 | `faiz-dash inspect [--live] [--json]` | Print sanitized Markdown (or JSON) snapshot of quotas, burn, cloud/backoff, mailbox, and telemetry |
 | `faiz-dash side` | Toggle on-demand right-split Textual sidebar inside Rex (`--focus=false`), or print native Terminal hint |
 | `faiz-dash dock` | Toggle on-demand bottom 3-column Dock inside Rex |
-| `faiz-dash config` | Launch interactive settings TUI (also accepts CLI flags: `--style`, `--theme`, `--lang`, `--quota-precision`, `--side-ratio`, `--auto-dock on\|off`, `--show`, `--reset`) |
+| `faiz-dash config` | Launch interactive settings TUI (also accepts CLI flags: `--style`, `--theme`, `--lang`, `--quota-precision`, `--row-colors`, `--capsule-color <id>=<color>`, `--side-ratio`, `--auto-dock on\|off`, `--show`, `--reset`) |
 | `faiz-dash off` / `on` / `status` | Disable/enable startup auto-dock (`~/.agents/cache/dash_disabled`) and inspect cache ages |
 | `faiz-dash --once-json [--quota-only] [--no-pty]` | Run one-shot probe collection and emit combined JSON |
 | `faiz-dash --preset 1 \| 2` | Open full-terminal TUI directly in horizontal Dock (`1`) or vertical Sidebar (`2`) |
@@ -142,6 +142,13 @@ All settings live cleanly in `~/.agents/statusline_config.json` (zero config nee
   "theme": "google",
   "color_mode": "row",
   "quota_precision": "exact",
+  "row_colors": ["blue", "blue", "blue", "blue"],
+  "capsule_colors": {
+    "context": "auto",
+    "cache": "green",
+    "argon": "yellow",
+    "mailbox": "red"
+  },
   "control_center": {
     "side_ratio": 28,
     "dock_ratio": 22
@@ -164,7 +171,7 @@ If your workflow runs remote workers on Google Colab + Drive (`rclone`) + GCE Sp
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-GitHub Actions CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) verifies shell syntax, `styles.tcss` wheel packaging, and all 36 unit/integration/Textual Pilot tests across Ubuntu & macOS.
+GitHub Actions CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) verifies shell syntax, `styles.tcss` wheel packaging, and all 38 unit/integration/Textual Pilot tests across Ubuntu & macOS.
 
 ## License
 

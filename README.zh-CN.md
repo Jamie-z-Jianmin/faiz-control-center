@@ -15,12 +15,12 @@
 ## 核心特性
 
 - **与 `/usage` 两位小数逐位对齐（`21.36% · 51.66%`）**：通过隔离 PTY 探针采集 5 小时与每周剩余配额（带 `flock` 并发锁与 `rfind()` 尾帧防重绘撕裂）；当检测到活跃对话消耗配额时自动切换为 **45 秒高频后台刷新**（空闲保持 180 秒零消耗）。
-- **`<80ms` 纯 Bash + `jq` 热路径渲染**：永不阻塞输入提示符。支持 **90 列分屏 4x2 对齐矩阵**、宽屏（`>=155` 列）自动单行展开、`Apple_Terminal` 16 色自动降级；未配置云端环境时自动零噪音隐藏云模块。
+- **`<80ms` 纯 Bash + `jq` 热路径渲染**：永不阻塞输入提示符。采用统一**深石板蓝**默认视觉与四级自适应矩阵：宽屏（`>=155` 列）自动扩展为完整标签 **`2×4` 铺满矩阵**，中屏分屏（`88–154` 列）保持 **4 行紧凑 `2×4` 玻璃胶囊**（内建 `cold` 标签兜底防塌缩），窄屏分屏（`46–86` 列）自动收紧为 **5 行 `4×2` 石板蓝线框 `[ ... ]` 胶囊**，并支持 `Apple_Terminal` 16 色降级与无云端配置零噪音隐藏。
 - **Prompt Cache 命中率与实时输出速率 (`t/s`)**：仅增量读取当前会话 `transcript.jsonl` 尾行，实时呈现缓存命中率、3m/4m TTL 冷却预警与真实输出速度 (`t/s`)。
 - **零常驻挤压的双通道检视**：
   - **会话内气泡式诊断（`/faiz-dash` / `faiz-dash inspect`）**：不占用终端列宽，直接输出配额四分组与重置倒计时、24 小时各模型 Token Burn、Cloud/Drive 退避状态、Mailbox 队列核验与只读 APM 遥测摘要。
   - **Rex 按需右侧边栏（`faiz-dash side`）**：在 Rex 内一键开关右侧 28% 宽度实时看板（`--focus=false` 不抢焦点，按 `q` 或再次执行 `faiz-dash side` 关闭），默认关闭启动自动 Dock（`faiz-dash off`）。
-- **中英双语设置工作室（`faiz-dash config`）**：交互式配置 8 个信息模块、5 种视觉风格（`capsule` / `powerline` / `pill` / `ghost` / `minimal`）、4 套主题配色、`ring`/`bar` 指示器、配额精度（`exact` 2 位 / `1dp` / `int`）、启动开关及分屏宽度比例，底部提供实时 TrueColor 预览。
+- **中英双语设置工作室（`faiz-dash config`）**：交互式配置 8 个信息模块、5 种视觉风格（`capsule` / `powerline` / `pill` / `ghost` / `minimal`）、5 套主题配色（`google` / `nord` / `tokyo_night` / `catppuccin` / `custom`）、**按胶囊独立覆盖配色（`capsule_colors` / `--capsule-color`）**、行统一配色（`row_colors`）、`ring`/`bar` 指示器、配额精度（`exact` 2 位 / `1dp` / `int`）、启动开关及 Rex 分屏比例，底部提供实时 TrueColor 预览。
 - **可选云算力与异步队列扩展**：配置 `rclone.conf` 后自动接入 Colab 心跳状态、60 分钟闲置计时、GCE Spot 实例监控、Google Drive 水位（含持久指数退避）与产物防假完成核验。
 
 ---
@@ -110,7 +110,7 @@ faiz-dash config          # 打开双语实时预览设置中心
 | `faiz-dash inspect [--live] [--json]` | 非交互式输出配额、24h Burn、云端退避、Mailbox 与 APM 遥测报告 |
 | `faiz-dash side` | 在 Rex 中按需打开/关闭右侧边栏（保持主对话焦点；非 Rex 终端会提示替代方案） |
 | `faiz-dash dock` | 在 Rex 中按需打开/关闭底部三栏 Dock |
-| `faiz-dash config` | 启动设置 UI（也支持 CLI 参数：`--style`、`--theme`、`--lang zh\|en`、`--quota-precision exact\|1dp\|int`、`--side-ratio`、`--auto-dock on\|off`、`--show`、`--reset`） |
+| `faiz-dash config` | 启动设置 UI（也支持 CLI 参数：`--style`、`--theme`、`--lang zh\|en`、`--quota-precision exact\|1dp\|int`、`--row-colors`、`--capsule-color <id>=<color>`、`--side-ratio`、`--auto-dock on\|off`、`--show`、`--reset`） |
 | `faiz-dash off` / `on` / `status` | 关闭/开启新会话自动弹出底部 Dock（`~/.agents/cache/dash_disabled`）及查看缓存状态 |
 | `faiz-dash --once-json [--quota-only] [--no-pty]` | 单次采集快照并输出脱敏 JSON |
 | `faiz-dash --preset 1 \| 2` | 在当前终端直接以横排 Dock (`1`) 或竖排侧栏 (`2`) 启动全屏 TUI |
@@ -140,4 +140,4 @@ faiz-dash config          # 打开双语实时预览设置中心
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 36 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。
+[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 38 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。

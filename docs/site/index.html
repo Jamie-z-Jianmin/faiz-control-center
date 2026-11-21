@@ -296,7 +296,7 @@
       </div>
 
       <div class="hero-shot">
-        <img src="./assets/hero-statusline-themes.png" alt="Faiz StatusLine adaptive 90-col matrix and TrueColor themes" />
+        <img src="./assets/hero-statusline-themes.png" alt="Faiz StatusLine unified slate-blue 2x4 matrix, narrow 5-line 4x2 outline, and per-capsule color overrides" />
       </div>
     </section>
 
@@ -304,8 +304,8 @@
       <h2>Core Architecture</h2>
       <div class="grid-2">
         <div class="card">
-          <h3>&lt;80ms Pure Bash + jq StatusLine</h3>
-          <p>Reads local snapshots in sub-millisecond time without blocking prompts. Features a 90-col 4x2 aligned matrix on split panes, single-row wide expansion, and automatic 16-color fallback on Apple Terminal.</p>
+          <h3>&lt;80ms Responsive Matrix StatusLine</h3>
+          <p>Pure Bash + <code>jq</code> renders sub-80ms telemetry in unified deep slate-blue: wide <code>2&times;4</code> bento spread (<code>&gt;=155c</code>), compact 4-line <code>2&times;4</code> glass (<code>88–154c</code>), tight 5-line <code>4&times;2</code> slate-blue <code>[ ... ]</code> outline (<code>46–86c</code>), plus per-capsule color overrides (<code>capsule_colors</code>) and Apple Terminal 16-color fallback.</p>
         </div>
         <div class="card">
           <h3>Exact 2dp /usage Sync (45s Active)</h3>
@@ -330,8 +330,8 @@
           <img src="./assets/control-center-dock-side.png" alt="Faiz Control Center bottom dock and Rex right sidebar" />
         </div>
         <div class="shot-card">
-          <div class="shot-cap">Interactive Bilingual Settings Studio with Live TrueColor Preview (faiz-dash config)</div>
-          <img src="./assets/config-studio.png" alt="Faiz StatusLine and Control Center settings TUI" />
+          <div class="shot-cap">Interactive Bilingual Settings Studio with Per-Capsule Color Overrides (<code>faiz-dash config</code>)</div>
+          <img src="./assets/config-studio.png" alt="Faiz StatusLine and Control Center settings TUI with per-capsule color overrides" />
         </div>
       </div>
     </section>
@@ -346,7 +346,7 @@
           <tr><td><code>faiz-dash inspect [--live] [--json]</code></td><td>Print non-interactive diagnostic summary of quotas, 24h burn, cloud backoff, mailbox, and telemetry</td></tr>
           <tr><td><code>faiz-dash side</code></td><td>Toggle 28% right Textual sidebar inside Rex (<code>--focus=false</code>), with native Terminal fallback hint</td></tr>
           <tr><td><code>faiz-dash dock</code></td><td>Toggle bottom 3-column Dock inside Rex</td></tr>
-          <tr><td><code>faiz-dash config</code></td><td>Open interactive <code>en/zh</code> settings UI (supports CLI flags like <code>--style</code>, <code>--theme</code>, <code>--quota-precision</code>)</td></tr>
+          <tr><td><code>faiz-dash config</code></td><td>Open interactive <code>en/zh</code> settings UI (supports <code>--style</code>, <code>--theme</code>, <code>--row-colors</code>, <code>--capsule-color &lt;id&gt;=&lt;color&gt;</code>, <code>--quota-precision</code>)</td></tr>
           <tr><td><code>faiz-dash off / on / status</code></td><td>Manage startup auto-dock flag and inspect snapshot cache ages</td></tr>
         </tbody>
       </table>
