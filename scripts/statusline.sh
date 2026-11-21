@@ -383,6 +383,78 @@ else
     end;'
 fi
 
+if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" == *'"max_width"'* ]]; then
+    JQ_MATRIX_PACK='
+  def compact_2x4_items($items; $lvl):
+    [
+      $items[] |
+      if .cap_id == "speed" and ((.parts | length) > 1) then
+        .parts |= .[1:]
+      elif .cap_id == "gemini" then
+        .parts |= (
+          [
+            range(0; length) as $pi |
+            .[$pi] |
+            if ($lvl >= 2) and ($pi == 0) and (.r == "lbl") and (.t == "Gemini ") then
+              .t = "Gem "
+            elif (.r == "val") and (.t | test("^[0-9]+\\.[0-9]+%$")) then
+              .t |= ((.[0:-1] | tonumber | round | tostring) + "%")
+            else . end
+          ]
+        )
+      elif $lvl >= 2 then
+        if .cap_id == "cache" and ((.parts | length) > 0) and (.parts[0].r == "lbl") then
+          .parts[0].t = "C"
+        elif .cap_id == "sessions" and ((.parts | length) > 1) and (.parts[0].r == "lbl") then
+          .parts |= .[1:]
+        elif .cap_id == "colab" and ((.parts | length) > 0) and (.parts[0].r == "lbl") and (.parts[0].t == "Colab ") then
+          .parts[0].t = "Clb "
+        elif .cap_id == "mailbox" and ((.parts | length) > 0) and (.parts[0].r == "lbl") then
+          .parts[0].t = "Q"
+        else . end
+      else . end
+    ];
+
+  def pack_matrix_rows($items; $max_w; $do_wrap; $sep_w; $style; $expand_w):
+    if ($items | length) < 5 or ($do_wrap | not) or $max_w <= 0 then
+      {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
+    else
+      ((($items | length) + 1) / 2 | floor) as $cols2 |
+      (
+        pack_grid($items; $cols2; $max_w; $sep_w; $style; $expand_w) //
+        (if ($max_w >= 86) and ($style != "minimal") then
+          (pack_grid(compact_2x4_items($items; 1); $cols2; $max_w; $sep_w; $style; $expand_w) //
+           pack_grid(compact_2x4_items($items; 2); $cols2; $max_w; $sep_w; $style; $expand_w))
+         else null end)
+      ) as $g2 |
+      if $g2 != null then
+        {mode: "2x4", rows: $g2}
+      else
+        (if ($max_w >= 50) and ($style != "minimal") then 2 else $sep_w end) as $sep4 |
+        pack_grid($items; 2; $max_w; $sep4; $style; ($max_w >= 54)) as $g4 |
+        if $g4 != null then
+          {mode: "4x2", rows: $g4}
+        else
+          {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
+        end
+      end
+    end;'
+else
+    JQ_MATRIX_PACK='
+  def pack_matrix_rows($items; $max_w; $do_wrap; $sep_w; $style; $expand_w):
+    if ($items | length) < 5 or ($do_wrap | not) or $max_w <= 0 then
+      {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
+    else
+      ((($items | length) + 1) / 2 | floor) as $cols2 |
+      pack_grid($items; $cols2; $max_w; $sep_w; $style; $expand_w) as $g2 |
+      if $g2 != null then
+        {mode: "2x4", rows: $g2}
+      else
+        {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
+      end
+    end;'
+fi
+
 JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   def rst: "\u001b[0m";
   def fmt1:
@@ -484,24 +556,7 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
         [range(0; ($gr | length)) as $c | $gr[$c] + {pad: ($col_ws[$c] - cap_width($gr[$c]; $style))}]
       ]
     else null end;
-
-  def pack_matrix_rows($items; $max_w; $do_wrap; $sep_w; $style; $expand_w):
-    if ($items | length) < 5 or ($do_wrap | not) or $max_w <= 0 then
-      {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
-    else
-      ((($items | length) + 1) / 2 | floor) as $cols2 |
-      pack_grid($items; $cols2; $max_w; $sep_w; $style; $expand_w) as $g2 |
-      if $g2 != null then
-        {mode: "2x4", rows: $g2}
-      else
-        pack_grid($items; 2; $max_w; $sep_w; $style; ($max_w >= 54)) as $g4 |
-        if $g4 != null then
-          {mode: "4x2", rows: $g4}
-        else
-          {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
-        end
-      end
-    end;
+'"${JQ_MATRIX_PACK}"'
 
   ($u[0] // {}) as $u |
   ($c[0] // {}) as $c |
@@ -1021,13 +1076,15 @@ JQ_MAIN='
 '
 
 JQ_TAIL=' |
-  (if ($eff_style == "minimal") then " | " elif $wide_rich or ($narrow_4x2 and ($eff_cols >= 50)) then "  " elif ($use_compact or $use_adaptive_2row) then " " else "  " end) as $sep |
-  ($sep | disp_len) as $sep_w |
-  (if $use_adaptive_2row then pack_matrix_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style; $wide_rich)
-   else {mode: "flow", rows: pack_rows(.; $eff_cols; $auto_wrap; $sep_w; $eff_style)} end) as $grid_res |
+  (if ($eff_style == "minimal") then " | " elif $wide_rich or ($narrow_4x2 and ($eff_cols >= 50)) then "  " elif ($use_compact or $use_adaptive_2row) then " " else "  " end) as $base_sep |
+  ($base_sep | disp_len) as $base_sep_w |
+  (if $use_adaptive_2row then pack_matrix_rows(.; $eff_cols; $auto_wrap; $base_sep_w; $eff_style; $wide_rich)
+   else {mode: "flow", rows: pack_rows(.; $eff_cols; $auto_wrap; $base_sep_w; $eff_style)} end) as $grid_res |
   ($grid_res.mode) as $grid_mode |
   ($grid_res.rows) as $rows |
   ($grid_mode == "2x4" or $grid_mode == "4x2") as $is_matrix |
+  (if ($eff_style == "minimal") then " | " elif $wide_rich or ($grid_mode == "4x2" and ($eff_cols >= 50)) then "  " else $base_sep end) as $sep |
+  ($sep | disp_len) as $sep_w |
   (if $eff_style == "capsule" and ($grid_mode == "4x2") then "outline" else $eff_style end) as $render_style |
   [
     range(0; ($rows | length)) as $ri |

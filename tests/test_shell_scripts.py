@@ -141,6 +141,45 @@ class TestShellScripts(unittest.TestCase):
             self.assertIn("Queue 2R · 1F", plain_lines_91[3])
             self.assertNotIn("live", plain_91)
 
+            # Cold cache (+5 chars) + Arg·Cla at 91 cols stays 4-line 2x4 slate-blue glass matrix via compact rescue
+            old_ts_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ep - 360))
+            t_cold = fake_home / "transcript_cold.jsonl"
+            t_cold.write_text(
+                json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": old_ts_iso, "input_tokens": 2500, "cache_read_tokens": 90000, "output_tokens": 900}) + "\n",
+                encoding="utf-8",
+            )
+            os.utime(t_cold, (now_ep - 300, now_ep - 300))
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({"pro_5h_pct": 100.0, "pro_wk_pct": 3.86, "argon_wk_pct": 1.63, "claude_5h_pct": 100.0, "claude_wk_pct": 77.82, "quota_gate": "WARN_PRO", "pro_count": 3, "gcp_count": 0}),
+                encoding="utf-8",
+            )
+            env_91_cold = {**env_91, "FAIZ_TRANSCRIPT_PATH": str(t_cold)}
+            res_91_cold = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_91_cold, capture_output=True, check=True)
+            out_91_cold = res_91_cold.stdout.decode("utf-8", errors="replace")
+            lines_91_cold = out_91_cold.splitlines()
+            self.assertEqual(len(lines_91_cold), 4)
+            self.assertIn("35;45;64", lines_91_cold[1])
+            self.assertNotIn("84;108;150", out_91_cold)
+            plain_91_cold = re.sub(r"\x1b\[[0-9;]*m", "", out_91_cold).splitlines()
+            self.assertEqual(len({len(ln) for ln in plain_91_cold}), 1)
+            self.assertLessEqual(len(plain_91_cold[1]), 89)
+            self.assertIn("Cache 97% cold", plain_91_cold[1])
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 57.42,
+                        "pro_wk_pct": 87.55,
+                        "argon_wk_pct": 13.78,
+                        "quota_gate": "THROTTLE_ARGON",
+                        "pro_count": 2,
+                        "gcp_count": 1,
+                        "tokens_1h": 1766049,
+                        "pro_5h_reset_at_epoch": int(time.time() + 12750),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
             # Switch secondary_metric="reset" & idle queue -> displays Reset countdown and Queue Idle (suppresses UNV noise)
             (fake_home / ".agents" / "statusline_config.json").write_text(
                 json.dumps({"secondary_metric": "reset"}), encoding="utf-8"
