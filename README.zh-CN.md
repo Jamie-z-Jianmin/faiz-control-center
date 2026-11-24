@@ -14,14 +14,14 @@
 
 ## 核心特性
 
-- **与 `/usage` 两位小数逐位对齐（`21.36% · 51.66%`）**：通过隔离 PTY 探针采集 5 小时与每周剩余配额（带 `flock` 并发锁与 `rfind()` 尾帧防重绘撕裂）；当检测到活跃对话消耗配额时自动切换为 **45 秒高频后台刷新**（空闲保持 180 秒零消耗）。
+- **`/usage` 双组实时配额对齐（`GEMINI MODELS` + `CLAUDE AND GPT MODELS`）**：通过隔离 PTY 探针采集 5 小时与每周剩余配额（带 `flock` 并发锁，以及基于 `Within each group` 与 `rfind()` 的动态尾帧收敛，兼顾极速返回与防重绘撕裂）；当检测到活跃对话消耗配额时自动切换为 **45 秒高频后台刷新**（空闲保持 180 秒零消耗）。当无独立 Argon 分组时自动以 `Claude` 胶囊与 TUI 面板行替代呈现，同时向后兼容旧版三分组快照与 `capsule_colors.argon` 配色覆盖。
 - **`<80ms` 纯 Bash + `jq` 热路径渲染**：永不阻塞输入提示符。采用统一**深石板蓝**默认视觉与四级自适应矩阵：宽屏（`>=155` 列）自动扩展为完整标签 **`2×4` 铺满矩阵**，中屏分屏（`88–154` 列）保持 **4 行紧凑 `2×4` 玻璃胶囊**（内建 `cold` 标签兜底防塌缩），窄屏分屏（`46–86` 列）自动收紧为 **5 行 `4×2` 石板蓝线框 `[ ... ]` 胶囊**，并支持 `Apple_Terminal` 16 色降级与无云端配置零噪音隐藏。
 - **Prompt Cache 命中率与实时输出速率 (`t/s`)**：仅增量读取当前会话 `transcript.jsonl` 尾行，实时呈现缓存命中率、3m/4m TTL 冷却预警与真实输出速度 (`t/s`)。
 - **零常驻挤压的双通道检视**：
-  - **会话内气泡式诊断（`/faiz-dash` / `faiz-dash inspect`）**：不占用终端列宽，直接输出配额四分组与重置倒计时、24 小时各模型 Token Burn、Cloud/Drive 退避状态、Mailbox 队列核验与只读 APM 遥测摘要。
+  - **会话内气泡式诊断（`/faiz-dash` / `faiz-dash inspect`）**：不占用终端列宽，直接输出配额分组与重置倒计时、24 小时各模型 Token Burn、Cloud/Drive 退避与 `colab_source` / `colab_gpu` / `drive_backend` 遥测、Mailbox 队列核验与只读 APM 遥测摘要。
   - **Rex 按需右侧边栏（`faiz-dash side`）**：在 Rex 内一键开关右侧 28% 宽度实时看板（`--focus=false` 不抢焦点，按 `q` 或再次执行 `faiz-dash side` 关闭），默认关闭启动自动 Dock（`faiz-dash off`）。
-- **中英双语设置工作室（`faiz-dash config`）**：交互式配置 8 个信息模块、5 种视觉风格（`capsule` / `powerline` / `pill` / `ghost` / `minimal`）、5 套主题配色（`google` / `nord` / `tokyo_night` / `catppuccin` / `custom`）、**按胶囊独立覆盖配色（`capsule_colors` / `--capsule-color`）**、行统一配色（`row_colors`）、`ring`/`bar` 指示器、配额精度（`exact` 2 位 / `1dp` / `int`）、启动开关及 Rex 分屏比例，底部提供实时 TrueColor 预览。
-- **可选云算力与异步队列扩展**：配置 `rclone.conf` 后自动接入 Colab 心跳状态、60 分钟闲置计时、GCE Spot 实例监控、Google Drive 水位（含持久指数退避）与产物防假完成核验。
+- **中英双语设置工作室（`faiz-dash config`）**：交互式配置 8 个信息模块、5 种视觉风格（`capsule` / `powerline` / `pill` / `ghost` / `minimal`）、5 套主题配色（`google` / `nord` / `tokyo_night` / `catppuccin` / `custom`）、**按胶囊独立覆盖配色（`capsule_colors` / `--capsule-color`，其中 `argon` 自动向后兼容映射至 `claude`）**、行统一配色（`row_colors`）、`ring`/`bar` 指示器、配额精度（`exact` 2 位 / `1dp` / `int`）、启动开关及 Rex 分屏比例，底部提供实时 TrueColor 预览。
+- **双平面云算力与异步队列扩展**：将 `google-colab-cli`（`colab --auth=adc`）控制平面（实时会话、GPU 型号、算力单元余额）与 Drive 数据平面解耦，支持 `gdrive` CLI 与 `rclone` 双后端自动优选（`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`），并集成 GCE Spot 实例监控、Drive 水位（含持久指数退避）与产物防假完成核验。
 
 ---
 
@@ -41,9 +41,11 @@ flowchart LR
     Transcript["transcript.jsonl 尾行"] -->|"Cache 命中, TTL, t/s"| SL
     SL -->|"毫秒级只读"| Cache["~/.agents/cache/*.json"]
     SL -.->|"活跃 45s / 空闲 180s (--quota-only)"| Daemon["faiz-dash --once-json"]
-    Daemon -->|"PTY rfind() + flock"| Usage["UsageProbe (/usage)"]
-    Daemon -->|"检测到 rclone.conf 时启用"| Cloud["CloudProbe + MailboxProbe"]
+    Daemon -->|"PTY Within-each-group + rfind() + flock"| Usage["UsageProbe (/usage)"]
+    Daemon -->|"控制平面 (colab --auth=adc)"| Colab["ColabCliGateway"]
+    Daemon -->|"数据平面 (gdrive / rclone)"| Cloud["CloudProbe + MailboxProbe"]
     Usage --> Store["StateStore (密钥脱敏)"]
+    Colab --> Store
     Cloud --> Store
     Store --> Cache
     Cache --> Inspect["faiz-dash inspect (/faiz-dash 技能)"]
@@ -57,7 +59,7 @@ flowchart LR
 ### 环境依赖
 - **macOS 或 Linux**，Python **3.12+**、`bash`、`jq`
 - **Antigravity CLI**（`agy` 位于 `PATH`）
-- 可选：**Rex Terminal**（支持 `faiz-dash side` / `dock` 按需分屏）；仅需监控 Colab/GCE/Drive 时才需要 `rclone` / `gcloud`
+- 可选：**Rex Terminal**（支持 `faiz-dash side` / `dock` 按需分屏）；仅需监控 Colab/GCE/Drive 时才需要 **`colab` CLI（`google-colab-cli`）、`gdrive` CLI、`rclone` 或 `gcloud`**
 
 ### 安装步骤
 
@@ -128,9 +130,10 @@ faiz-dash config          # 打开双语实时预览设置中心
 
 ## 配置与可选云端扩展
 
-所有配置保存在 `~/.agents/statusline_config.json`（纯本地模式零配置即可开箱使用）。若你有 Colab / Drive (`rclone`) / GCE Spot 监控需求：
-1. 在 `~/.config/rclone/rclone.conf` 中配置目标 remote（默认 `gdrive`）。
-2. 通过 `~/.agents/statusline_config.json` 的 `"cloud"` 字段或环境变量（`FAIZ_GCP_PROJECT`、`FAIZ_RCLONE_REMOTE`、`FAIZ_COLAB_STATUS_PATH`、`FAIZ_MAILBOX_ROOT`、`FAIZ_PROJECTS_ROOT`）覆盖路径即可；无 `rclone.conf` 时系统保持 `NOT_CONFIGURED` 零告警降级。
+所有配置保存在 `~/.agents/statusline_config.json`（纯本地模式零配置即可开箱使用）。若你有 Colab / Drive (`gdrive` CLI / `rclone`) / GCE Spot 监控需求：
+1. **控制平面（`google-colab-cli`）**：完成 `colab --auth=adc` 授权（存在 ADC 或 `~/.config/colab-cli`）后，即可独立于 Drive 限流实时采集活跃会话数、GPU 型号（`colab_gpu`）、算力单元余额及来源标记 `colab_source`（`colab_cli` 或 `drive` 回退）。
+2. **数据平面（`gdrive` CLI / `rclone`）**：配置 `gdrive` CLI（`FAIZ_DRIVE_BACKEND=auto` 下自动优先）或在 `~/.config/rclone/rclone.conf` 中配置目标 remote（默认 `gdrive`），并在遥测中透出当前生效的 `drive_backend`（`gdrive` 或 `rclone`）。
+3. 通过 `~/.agents/statusline_config.json` 的 `"cloud"` 字段或环境变量（`FAIZ_GCP_PROJECT`、`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`、`FAIZ_RCLONE_REMOTE`、`FAIZ_COLAB_STATUS_PATH`、`FAIZ_MAILBOX_ROOT`、`FAIZ_PROJECTS_ROOT`）覆盖路径与后端；未配置 `colab` CLI、`gdrive` CLI 与 `rclone.conf` 时系统保持 `NOT_CONFIGURED` 零告警降级。
 
 ---
 
@@ -140,4 +143,4 @@ faiz-dash config          # 打开双语实时预览设置中心
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 38 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。
+[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 47 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。

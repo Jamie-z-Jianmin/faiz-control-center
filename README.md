@@ -14,14 +14,14 @@ English | [简体中文](README.zh-CN.md)
 
 ## Highlights
 
-- **Exact `/usage` Quota Parity (`21.36% · 51.66%`)**: Captures live 5-hour & weekly remaining limits via an isolated PTY `/usage` probe (`flock`-guarded, `rfind()` frame settle to prevent TUI repaint tearing) with **activity-aware 45s refresh** when active turns burn quota (180s when idle).
+- **Exact `/usage` Quota Parity (`GEMINI MODELS` + `CLAUDE AND GPT MODELS`)**: Captures live 5-hour & weekly remaining limits via an isolated PTY `/usage` probe (`flock`-guarded, dynamic `Within each group` + `rfind()` frame settle for fast PTY convergence without repaint tearing) with **activity-aware 45s refresh** when active turns burn quota (180s when idle). Renders dedicated `Gemini` and `Claude` capsules & TUI rows when standalone Argon is absent while staying backward-compatible with legacy 3-bucket snapshots and `capsule_colors.argon` overrides.
 - **Sub-80ms Pure Bash + `jq` StatusLine**: Never blocks prompt rendering. Features a unified **deep slate-blue** palette with a 4-tier responsive matrix: full-label **wide `2×4` glass spread** (`>=155` cols), compact 4-line **`2×4` glass** (`88–154` cols, with cold-tag compaction rescue), tight **5-line `4×2` slate-blue `[ ... ]` outline** (`46–86` cols), plus `Apple_Terminal` 16-color fallback and zero-noise cloud hiding.
 - **Prompt Cache Hit & Live Token Speed (`t/s`)**: Reads only the trailing tail of the active session `transcript.jsonl` to surface Cache Hit %, 3m/4m TTL cooldown alerts, and real-time output generation speed (`t/s`).
 - **Zero-Clutter On-Demand Inspection**:
-  - **In-chat Diagnostic Bubble (`/faiz-dash` / `faiz-dash inspect`)**: Outputs a clean Markdown summary of all quota buckets, reset countdowns, 24h per-model token burn, cloud/drive backoff state, mailbox items, and read-only APM telemetry without occupying terminal width.
+  - **In-chat Diagnostic Bubble (`/faiz-dash` / `faiz-dash inspect`)**: Outputs a clean Markdown summary of all quota buckets, reset countdowns, 24h per-model token burn, cloud/drive backoff & `colab_source` / `colab_gpu` / `drive_backend` telemetry, mailbox items, and read-only APM telemetry without occupying terminal width.
   - **On-Demand Rex Sidebar (`faiz-dash side`)**: Toggles a 28% vertical Textual sidebar in Rex (`--focus=false`) on demand (`q` or `faiz-dash side` to dismiss). Defaults to no permanent dock (`faiz-dash off`).
-- **Bilingual Settings Studio (`faiz-dash config`)**: Interactive `en`/`zh` Textual config editor with 5 visual styles (`capsule`, `powerline`, `pill`, `ghost`, `minimal`), 5 themes (`google`, `nord`, `tokyo_night`, `catppuccin`, `custom`), **per-capsule color overrides (`capsule_colors`)** (`blue`, `green`, `yellow`, `red`, `slate`, `muted`, `auto`), row uniform palettes, `ring`/`bar` indicators, quota precision (`exact` / `1dp` / `int`), Rex split ratios, and live preview.
-- **Optional Cloud & Worker Swarm Extension**: Seamlessly monitors Colab runtime heartbeats, 60-minute idle timers, GCE Spot instances, `rclone` Drive quota (with persistent exponential rate-limit backoff), and async mailbox job verification when `rclone.conf` is configured.
+- **Bilingual Settings Studio (`faiz-dash config`)**: Interactive `en`/`zh` Textual config editor with 5 visual styles (`capsule`, `powerline`, `pill`, `ghost`, `minimal`), 5 themes (`google`, `nord`, `tokyo_night`, `catppuccin`, `custom`), **per-capsule color overrides (`capsule_colors`)** (`blue`, `green`, `yellow`, `red`, `slate`, `muted`, `auto`, with `argon` falling back cleanly to `claude`), row uniform palettes, `ring`/`bar` indicators, quota precision (`exact` / `1dp` / `int`), Rex split ratios, and live preview.
+- **Dual-Plane Cloud & Worker Swarm Extension**: Decouples the `google-colab-cli` (`colab --auth=adc`) Control Plane (active sessions, GPU hardware, compute-unit balance) from the Drive Data Plane, backed by an auto-selected `gdrive` CLI + `rclone` Drive gateway (`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`), GCE Spot instance monitoring, persistent exponential rate-limit backoff, and async mailbox job verification.
 
 ---
 
@@ -41,9 +41,11 @@ flowchart LR
     Transcript["transcript.jsonl (tail)"] -->|"Cache Hit %, TTL, t/s"| SL
     SL -->|"Read <1ms"| Cache["~/.agents/cache/*.json"]
     SL -.->|"Active 45s / Idle 180s (--quota-only)"| Daemon["faiz-dash --once-json"]
-    Daemon -->|"PTY rfind() + flock"| Usage["UsageProbe (/usage)"]
-    Daemon -->|"Optional if rclone.conf exists"| Cloud["CloudProbe + MailboxProbe"]
+    Daemon -->|"PTY Within-each-group + rfind() + flock"| Usage["UsageProbe (/usage)"]
+    Daemon -->|"Control Plane (colab --auth=adc)"| Colab["ColabCliGateway"]
+    Daemon -->|"Data Plane (gdrive / rclone)"| Cloud["CloudProbe + MailboxProbe"]
     Usage --> Store["StateStore (Secret Redacted)"]
+    Colab --> Store
     Cloud --> Store
     Store --> Cache
     Cache --> Inspect["faiz-dash inspect (/faiz-dash skill)"]
@@ -57,7 +59,7 @@ flowchart LR
 ### Prerequisites
 - **macOS or Linux** with Python **3.12+**, `bash`, and `jq`
 - **Antigravity CLI** (`agy` on `PATH`)
-- Optional: **Rex Terminal** (`rex` on `PATH`) for `faiz-dash side` / `dock` split panes; **rclone / gcloud** only if using Colab/GCE cloud monitoring
+- Optional: **Rex Terminal** (`rex` on `PATH`) for `faiz-dash side` / `dock` split panes; **`colab` CLI (`google-colab-cli`), `gdrive` CLI, `rclone`, or `gcloud`** only if using Colab/GCE/Drive cloud monitoring
 
 ### Install
 
@@ -158,10 +160,11 @@ All settings live cleanly in `~/.agents/statusline_config.json` (zero config nee
 
 ### Enabling Colab / GCE / Drive Monitoring (Optional)
 
-If your workflow runs remote workers on Google Colab + Drive (`rclone`) + GCE Spot:
-1. Configure an `rclone` remote (e.g., `gdrive`) in `~/.config/rclone/rclone.conf`.
-2. Customize `"cloud"` paths in `~/.agents/statusline_config.json` or via environment variables (`FAIZ_GCP_PROJECT`, `FAIZ_RCLONE_REMOTE`, `FAIZ_COLAB_STATUS_PATH`, `FAIZ_MAILBOX_ROOT`, `FAIZ_PROJECTS_ROOT`).
-3. If `rclone.conf` is absent, `CloudProbe` stays safely in `NOT_CONFIGURED` mode and `statusline.sh` hides cloud capsules automatically with zero error noise.
+If your workflow runs remote workers on Google Colab + Drive (`gdrive` CLI / `rclone`) + GCE Spot:
+1. **Control Plane (`google-colab-cli`)**: Authenticate `colab --auth=adc` (via `~/.config/gcloud/application_default_credentials.json` or `~/.config/colab-cli`) to surface live `colab_sessions_count`, `colab_gpu`, compute-unit balance, and `colab_source` (`colab_cli` vs `drive` fallback) independently of Drive rate limits.
+2. **Data Plane (`gdrive` CLI or `rclone`)**: Install `gdrive` CLI (auto-preferred when `FAIZ_DRIVE_BACKEND=auto`) or configure an `rclone` remote (e.g., `gdrive`) in `~/.config/rclone/rclone.conf`. Inspect output reports the active `drive_backend` (`gdrive` or `rclone`).
+3. Customize `"cloud"` paths in `~/.agents/statusline_config.json` or via environment variables (`FAIZ_GCP_PROJECT`, `FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`, `FAIZ_RCLONE_REMOTE`, `FAIZ_COLAB_STATUS_PATH`, `FAIZ_MAILBOX_ROOT`, `FAIZ_PROJECTS_ROOT`).
+4. If neither `colab` CLI, `gdrive` CLI, nor `rclone.conf` is configured, `CloudProbe` stays safely in `NOT_CONFIGURED` mode and `statusline.sh` hides cloud capsules automatically with zero error noise.
 
 ---
 
@@ -171,7 +174,7 @@ If your workflow runs remote workers on Google Colab + Drive (`rclone`) + GCE Sp
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-GitHub Actions CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) verifies shell syntax, `styles.tcss` wheel packaging, and all 38 unit/integration/Textual Pilot tests across Ubuntu & macOS.
+GitHub Actions CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) verifies shell syntax, `styles.tcss` wheel packaging, and all 47 unit/integration/Textual Pilot tests across Ubuntu & macOS.
 
 ## License
 

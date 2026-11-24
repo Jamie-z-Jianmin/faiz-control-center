@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "faiz-dash"
-version = "0.1.1"
+version = "0.2.0"
 description = "Antigravity CLI StatusLine companion, exact quota monitor, and Textual control center"
 readme = "README.md"
 license = {text = "MIT"}
