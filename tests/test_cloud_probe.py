@@ -8,11 +8,21 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from faiz_dash.collectors.cloud_probe import CloudProbe, parse_colab_timestamp
-from faiz_dash.gateways.drive import RcloneDriveGateway, inspect_rclone_conf
+from faiz_dash.gateways.colab import ColabCliGateway, parse_colab_sessions, parse_colab_usage
+from faiz_dash.gateways.drive import (
+    GdriveCliDriveGateway,
+    RcloneDriveGateway,
+    create_drive_gateway,
+    inspect_rclone_conf,
+    parse_gdrive_quota,
+)
+from faiz_dash.gateways.exec_util import CommandResult
+from faiz_dash.models import GceInstanceInfo
 
 
 class FakeDriveGateway:
@@ -172,6 +182,240 @@ class TestCloudProbe(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snap.colab_state, "NOT_CONFIGURED")
         self.assertIsNone(snap.error)
         self.assertFalse(snap.stale)
+
+    def test_parse_colab_sessions_and_usage(self) -> None:
+        empty_out = "[colab] No active sessions found on server.\n"
+        self.assertEqual(parse_colab_sessions(empty_out), ())
+
+        active_out = (
+            "[faiz-tts] https://m-s-abc123.colab.googleusercontent.com/ "
+            "| Hardware: L4 | Shape: STANDARD | Variant: GPU | Status: IDLE\n"
+            "[aux-cpu] https://m-s-xyz.colab.googleusercontent.com/ "
+            "| Hardware: CPU | Shape: HIGHMEM | Variant: DEFAULT\n"
+        )
+        parsed = parse_colab_sessions(active_out)
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0]["name"], "faiz-tts")
+        self.assertEqual(parsed[0]["hardware"], "L4")
+        self.assertEqual(parsed[0]["shape"], "STANDARD")
+        self.assertEqual(parsed[0]["variant"], "GPU")
+        self.assertEqual(parsed[0]["status"], "IDLE")
+        self.assertEqual(parsed[1]["hardware"], "CPU")
+
+        usage_out = (
+            "Current balance: 484.01 compute units\n"
+            "Usage rate: 0.00/hr\n"
+            "Active assignments: 0\n"
+        )
+        usage = parse_colab_usage(usage_out)
+        self.assertAlmostEqual(usage["balance_cu"], 484.01)
+        self.assertEqual(usage["usage_rate"], "0.00/hr")
+        self.assertEqual(usage["active_assignments"], 0)
+
+    async def test_gdrive_cli_gateway_cache_lsl_quota_and_factory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            id_cache = root / "folder_ids.json"
+            calls: list[tuple[str, ...]] = []
+
+            async def fake_run_exec(argv, **kwargs):  # type: ignore[no-untyped-def]
+                calls.append(tuple(argv))
+                args = list(argv)
+                if "quota" in args:
+                    return CommandResult(
+                        returncode=0,
+                        stdout="Used:  143.7 GB\nLimit: 5120.0 GB\nTrash: 0 B\n",
+                        stderr="",
+                    )
+                if "ls" in args:
+                    # `readonly ls [folderID] --json`
+                    idx = args.index("ls")
+                    next_arg = args[idx + 1] if idx + 1 < len(args) else "--json"
+                    folder_id = "root" if next_arg.startswith("--") else next_arg
+                    if folder_id == "root":
+                        payload = [
+                            {
+                                "id": "fld-colab",
+                                "name": "Colab_Notebooks",
+                                "mimeType": "application/vnd.google-apps.folder",
+                                "modifiedTime": "2026-11-18T10:00:00Z",
+                            }
+                        ]
+                    elif folder_id == "fld-colab":
+                        payload = [
+                            {
+                                "id": "file-status",
+                                "name": "status.json",
+                                "mimeType": "application/json",
+                                "size": "120",
+                                "modifiedTime": "2026-11-19T06:27:14.364Z",
+                            },
+                            {
+                                "id": "fld-mbox",
+                                "name": "mailbox",
+                                "mimeType": "application/vnd.google-apps.folder",
+                                "modifiedTime": "2026-11-18T10:00:00Z",
+                            },
+                        ]
+                    elif folder_id == "fld-mbox":
+                        payload = [
+                            {
+                                "id": "fld-done",
+                                "name": "done",
+                                "mimeType": "application/vnd.google-apps.folder",
+                                "modifiedTime": "2026-11-18T10:00:00Z",
+                            }
+                        ]
+                    elif folder_id == "fld-done":
+                        payload = [
+                            {
+                                "id": "file-job",
+                                "name": "job1.tts.json",
+                                "mimeType": "application/json",
+                                "size": "345",
+                                "modifiedTime": "2026-11-20T01:02:03Z",
+                            }
+                        ]
+                    else:
+                        payload = []
+                    return CommandResult(returncode=0, stdout=json.dumps(payload), stderr="")
+                if "download" in args:
+                    out_idx = args.index("--out") + 1
+                    Path(args[out_idx]).write_text('{"status":"ONLINE"}', encoding="utf-8")
+                    return CommandResult(returncode=0, stdout="Downloaded 19 B", stderr="")
+                return CommandResult(returncode=1, stdout="", stderr="unexpected command")
+
+            gw = GdriveCliDriveGateway(gdrive_bin="/usr/bin/true", id_cache_path=id_cache)
+            caps = gw.capabilities()
+            self.assertEqual(caps["backend"], "gdrive_cli")
+            self.assertFalse(caps["readonly"])
+            self.assertFalse(caps["shared_client_id"])
+            self.assertEqual(caps["warnings"], [])
+
+            with mock.patch("faiz_dash.gateways.drive.run_exec", side_effect=fake_run_exec):
+                items = await gw.lsl("Colab_Notebooks/mailbox/done", max_depth=1)
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0]["name"], "job1.tts.json")
+                self.assertEqual(items[0]["size"], 345)
+                self.assertEqual(items[0]["modified_at"], "2026-11-20 01:02:03")
+
+                # Folder IDs for Colab_Notebooks, status.json, mailbox, done are cached now
+                calls_before = len(calls)
+                status_txt = await gw.cat_text("Colab_Notebooks/status.json")
+                self.assertEqual(json.loads(status_txt)["status"], "ONLINE")
+                # Only 1 download call needed because file-status was cached during ls!
+                self.assertEqual(len(calls) - calls_before, 1)
+
+                quota = await gw.about()
+                self.assertGreater(quota["used"], 0)
+                self.assertEqual(quota["total"], 5120 * 1024**3)
+                self.assertEqual(quota["free"], quota["total"] - quota["used"])
+
+            # Missing fields in quota never raise and return {}
+            self.assertEqual(parse_gdrive_quota("{}"), {})
+            self.assertEqual(parse_gdrive_quota("Trash: 0 B"), {})
+
+            # Persisted cache reloads cleanly on fresh instance
+            gw2 = GdriveCliDriveGateway(gdrive_bin="/usr/bin/true", id_cache_path=id_cache)
+            self.assertEqual(gw2._id_cache.get("Colab_Notebooks/mailbox/done"), "fld-done")
+
+            # Factory selection
+            self.assertIsInstance(create_drive_gateway("rclone"), RcloneDriveGateway)
+            self.assertIsInstance(create_drive_gateway("gdrive"), GdriveCliDriveGateway)
+            with mock.patch.object(GdriveCliDriveGateway, "is_configured", return_value=True):
+                self.assertIsInstance(create_drive_gateway("auto"), GdriveCliDriveGateway)
+            with mock.patch.object(GdriveCliDriveGateway, "is_configured", return_value=False):
+                self.assertIsInstance(create_drive_gateway("auto"), RcloneDriveGateway)
+
+    async def test_cloud_probe_control_plane_decoupled_from_drive_failure_and_backoff(self) -> None:
+        class FakeColabGateway(ColabCliGateway):
+            def __init__(self, sessions: tuple[dict[str, object], ...]) -> None:
+                super().__init__(colab_bin="/usr/bin/true")
+                self.sessions = sessions
+                self.calls = 0
+
+            def is_configured(self) -> bool:
+                return True
+
+            async def list_sessions(self) -> tuple[dict[str, object], ...]:
+                self.calls += 1
+                return self.sessions
+
+        class CountingFailDrive(FakeDriveGateway):
+            def __init__(self) -> None:
+                super().__init__(should_fail=True)
+                self.cat_calls = 0
+                self.about_calls = 0
+
+            def capabilities(self) -> dict[str, object]:
+                return {
+                    "backend": "gdrive_cli",
+                    "configured": True,
+                    "read": True,
+                    "write": True,
+                    "readonly": False,
+                    "shared_client_id": False,
+                    "warnings": [],
+                }
+
+            async def cat_text(self, remote_path: str) -> str:
+                self.cat_calls += 1
+                raise RuntimeError("403 RATE_LIMIT_EXCEEDED: userRateLimitExceeded")
+
+            async def about(self) -> dict[str, object]:
+                self.about_calls += 1
+                raise RuntimeError("403 RATE_LIMIT_EXCEEDED")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            backoff_file = Path(tmp) / "cloud_backoff.json"
+            drive = CountingFailDrive()
+            colab_gw = FakeColabGateway(
+                sessions=(
+                    {
+                        "name": "faiz-tts",
+                        "endpoint": "https://example.colab.googleusercontent.com/",
+                        "hardware": "L4",
+                        "shape": "STANDARD",
+                        "variant": "GPU",
+                    },
+                )
+            )
+            probe = CloudProbe(drive, colab_gateway=colab_gw, backoff_path=backoff_file)
+
+            gce_calls = 0
+
+            async def fake_gce() -> tuple[tuple[GceInstanceInfo, ...], None]:
+                nonlocal gce_calls
+                gce_calls += 1
+                return (GceInstanceInfo("spot-l4", "us-central1-a", "TERMINATED"),), None
+
+            probe._fetch_gce_instances = fake_gce  # type: ignore[method-assign]
+
+            # 1. Active Colab session overrides failing Drive -> ONLINE (NOT DEGRADED)
+            t0 = datetime(2026, 11, 23, 8, 0, 0, tzinfo=timezone.utc)
+            snap_online = await probe.collect(now_utc=t0)
+            self.assertEqual(snap_online.colab_state, "ONLINE")
+            self.assertEqual(snap_online.colab_sessions_count, 1)
+            self.assertEqual(snap_online.colab_gpu, "L4")
+            self.assertEqual(snap_online.colab_source, "colab_cli")
+            self.assertEqual(snap_online.drive_backend, "gdrive")
+            self.assertFalse(snap_online.rclone_shared_client_id)
+            self.assertFalse(snap_online.stale)
+            self.assertEqual(drive.cat_calls, 1)
+            self.assertEqual(colab_gw.calls, 1)
+            self.assertEqual(gce_calls, 1)
+
+            # 2. During Drive backoff cooldown, Drive is skipped, but colab_gateway + GCE still probe!
+            colab_gw.sessions = ()
+            t1 = datetime(2026, 11, 23, 8, 1, 0, tzinfo=timezone.utc)
+            snap_stopped = await probe.collect(now_utc=t1)
+            self.assertEqual(drive.cat_calls, 1)  # Skipped by backoff!
+            self.assertEqual(colab_gw.calls, 2)   # Still probed!
+            self.assertEqual(gce_calls, 2)        # Still probed!
+            self.assertEqual(snap_stopped.colab_state, "STOPPED")
+            self.assertEqual(snap_stopped.colab_sessions_count, 0)
+            self.assertFalse(snap_stopped.stale)
+            self.assertEqual(len(snap_stopped.gce_instances), 1)
 
 
 if __name__ == "__main__":

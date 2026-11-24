@@ -352,6 +352,34 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(s2.mailbox)
             self.assertEqual(s2.mailbox.failed_count, 2)  # type: ignore[union-attr]
 
+    async def test_store_control_plane_cloud_ok_and_gdrive_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            store = StateStore(cache_dir=cache_dir)
+            await store.publish_cloud(
+                ColabGcpSnapshot(
+                    fetched_at="2026-11-23T08:30:00Z",
+                    colab_state="STOPPED",
+                    drive_backend="gdrive",
+                    colab_sessions_count=0,
+                    colab_gpu="",
+                    colab_source="colab_cli",
+                    error="Drive: 403 RATE_LIMIT_EXCEEDED",
+                    stale=False,
+                )
+            )
+            data = json.loads((cache_dir / "cloud_snapshot.json").read_text(encoding="utf-8"))
+            self.assertTrue(data["cloud_ok"])
+            self.assertEqual(data["drive_backend"], "gdrive")
+            self.assertEqual(data["colab_source"], "colab_cli")
+            self.assertEqual(data["colab_sessions_count"], 0)
+            self.assertFalse(data["rclone_shared_client_id"])
+
+            reloaded = StateStore(cache_dir=cache_dir)
+            self.assertIsNotNone(reloaded.cloud)
+            self.assertEqual(reloaded.cloud.drive_backend, "gdrive")  # type: ignore[union-attr]
+            self.assertEqual(reloaded.cloud.colab_source, "colab_cli")  # type: ignore[union-attr]
+
 
 if __name__ == "__main__":
     unittest.main()

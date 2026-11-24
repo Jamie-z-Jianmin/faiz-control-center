@@ -54,6 +54,7 @@ VALID_COLORS = (
 DEFAULT_CLOUD_PATHS: dict[str, str] = {
     "gcp_project": "your-gcp-project",
     "rclone_remote": "gdrive",
+    "drive_backend": "auto",
     "colab_status_path": "Colab_Notebooks/status.json",
     "mailbox_root": "Colab_Notebooks/mailbox",
     "projects_root": "Projects",
@@ -204,6 +205,7 @@ def get_cloud_settings(path: Optional[Path] = None) -> dict[str, str]:
     env_map = {
         "gcp_project": "FAIZ_GCP_PROJECT",
         "rclone_remote": "FAIZ_RCLONE_REMOTE",
+        "drive_backend": "FAIZ_DRIVE_BACKEND",
         "colab_status_path": "FAIZ_COLAB_STATUS_PATH",
         "mailbox_root": "FAIZ_MAILBOX_ROOT",
         "projects_root": "FAIZ_PROJECTS_ROOT",

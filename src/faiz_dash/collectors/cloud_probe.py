@@ -1,4 +1,4 @@
-"""Colab boot.sh status, GCE Spot instances, and Google Drive quota collector."""
+"""Colab CLI control-plane, boot.sh status.json, GCE Spot instances, and Drive quota collector."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Optional
 
+from ..gateways.colab import ColabCliGateway
 from ..gateways.drive import DriveGateway
 from ..gateways.exec_util import resolve_binary, run_exec
 from ..models import ColabGcpSnapshot, GceInstanceInfo
@@ -74,12 +75,13 @@ def parse_colab_timestamp(ts_str: str) -> Optional[datetime]:
 
 
 class CloudProbe:
-    """Collects Colab status.json, GCE Spot instances, and Drive space with backoff."""
+    """Collects Colab control-plane sessions, Drive status.json, GCE Spot, and Drive quota."""
 
     def __init__(
         self,
         drive: DriveGateway,
         *,
+        colab_gateway: Optional[ColabCliGateway] = None,
         gcloud_bin: str = DEFAULT_GCLOUD_BIN,
         gcp_project: Optional[str] = None,
         colab_status_path: Optional[str] = None,
@@ -89,6 +91,7 @@ class CloudProbe:
     ) -> None:
         cloud_cfg = get_cloud_settings()
         self.drive = drive
+        self.colab_gateway = colab_gateway
         self.gcloud_bin = gcloud_bin
         self.gcp_project = gcp_project or cloud_cfg["gcp_project"]
         self.colab_status_path = colab_status_path or cloud_cfg["colab_status_path"]
@@ -108,7 +111,7 @@ class CloudProbe:
 
     @property
     def in_backoff_skip(self) -> bool:
-        """Whether the most recent collect() skipped network work or hit rate-limit."""
+        """Whether the most recent collect() skipped Drive calls or hit Drive rate-limit."""
         return self._in_backoff_skip
 
     def _load_backoff(self) -> None:
@@ -160,6 +163,23 @@ class CloudProbe:
         idx = min(max(0, self._error_streak - 1), len(steps) - 1)
         return steps[idx]
 
+    def _record_drive_failure(self, err_msg: str, now_ep: float) -> None:
+        self._error_streak += 1
+        self._last_error_kind = self._classify_error_kind(err_msg)
+        self._last_error = err_msg
+        self._next_allowed_epoch = now_ep + self.next_backoff_seconds()
+        self._save_backoff()
+        if self._last_error_kind == "rate_limit":
+            self._in_backoff_skip = True
+
+    def _reset_drive_backoff(self) -> None:
+        if self._error_streak != 0 or self._next_allowed_epoch != 0.0 or self._last_error:
+            self._error_streak = 0
+            self._next_allowed_epoch = 0.0
+            self._last_error_kind = ""
+            self._last_error = ""
+            self._save_backoff()
+
     async def _fetch_gce_instances(self) -> tuple[tuple[GceInstanceInfo, ...], Optional[str]]:
         res = await run_exec(
             [
@@ -206,18 +226,25 @@ class CloudProbe:
         now_ep = now.timestamp()
         mono = time.monotonic()
         caps = self.drive.capabilities()
+        raw_backend = str(caps.get("backend") or "rclone").lower()
+        drive_backend = "gdrive" if "gdrive" in raw_backend else "rclone"
+        drive_configured = caps.get("configured") is not False
+        colab_configured = self.colab_gateway is not None and self.colab_gateway.is_configured()
 
-        if caps.get("configured") is False:
+        if not drive_configured and not colab_configured:
             self._in_backoff_skip = True
             return ColabGcpSnapshot(
                 fetched_at=now_iso,
                 colab_state="NOT_CONFIGURED",
                 rclone_readonly=bool(caps.get("readonly", False)),
                 rclone_shared_client_id=bool(caps.get("shared_client_id", False)),
+                drive_backend=drive_backend,
+                colab_source="drive",
                 stale=False,
             )
 
-        if not force and now_ep < self._next_allowed_epoch:
+        drive_in_backoff = (not force) and (now_ep < self._next_allowed_epoch)
+        if not colab_configured and drive_in_backoff:
             self._in_backoff_skip = True
             if self._last_snapshot is not None:
                 return ColabGcpSnapshot(
@@ -225,6 +252,7 @@ class CloudProbe:
                         **self._last_snapshot.__dict__,
                         "fetched_at": now_iso,
                         "colab_state": "DEGRADED",
+                        "drive_backend": drive_backend,
                         "error": self._last_error or self._last_snapshot.error,
                         "stale": True,
                     }
@@ -234,14 +262,15 @@ class CloudProbe:
                 colab_state="DEGRADED",
                 rclone_readonly=bool(caps.get("readonly", False)),
                 rclone_shared_client_id=bool(caps.get("shared_client_id", False)),
+                drive_backend=drive_backend,
+                colab_source="drive",
                 error=self._last_error or "Drive backoff cooldown active",
                 stale=True,
             )
 
-        self._in_backoff_skip = False
+        self._in_backoff_skip = drive_in_backoff or (not drive_configured)
         errors: list[str] = []
 
-        # 1. Colab status.json
         raw_status = ""
         colab_state = "DEGRADED"
         project = ""
@@ -251,68 +280,145 @@ class CloudProbe:
         age_seconds: Optional[int] = None
         idle_remaining: Optional[int] = None
         webui_url = ""
-        colab_ok = False
+        colab_sessions_count: Optional[int] = None
+        colab_gpu = ""
+        colab_source = "drive"
+        colab_ctrl_ok = False
+        colab_drive_ok = False
 
-        try:
-            status_text = await self.drive.cat_text(self.colab_status_path)
-            status_json: dict[str, Any] = json.loads(status_text)
-            colab_ok = True
-            raw_status = str(status_json.get("status", "")).strip()
-            project = str(status_json.get("project", "")).strip()
-            mode = str(status_json.get("mode", "")).strip()
-            reason = str(status_json.get("reason", "")).strip()
-            updated_str = str(
-                status_json.get("updated_at") or status_json.get("stopped_at") or ""
-            ).strip()
-            webui_url = str(status_json.get("webui_url") or status_json.get("api_url") or "").strip()
-
-            parsed_ts = parse_colab_timestamp(updated_str)
-            if parsed_ts is not None:
-                age_seconds = max(0, int((now - parsed_ts).total_seconds()))
-
-            if raw_status.upper().startswith("STOPPED"):
-                colab_state = "STOPPED"
-                idle_remaining = 0
-            elif raw_status.upper() == "ONLINE":
-                if age_seconds is None or age_seconds > STALE_THRESHOLD_SECONDS:
-                    colab_state = "STALE_OFFLINE"
-                else:
+        # 1. Authoritative control-plane probe (`colab --auth=adc sessions`) — never blocked by Drive backoff
+        if colab_configured and self.colab_gateway is not None:
+            try:
+                sessions = await self.colab_gateway.list_sessions()
+                colab_ctrl_ok = True
+                colab_source = "colab_cli"
+                colab_sessions_count = len(sessions)
+                if sessions:
                     colab_state = "ONLINE"
-                idle_sec = int(status_json.get("idle_seconds") or 0)
-                idle_remaining = max(0, IDLE_LIMIT_SECONDS - idle_sec)
-            else:
-                colab_state = raw_status or "UNKNOWN"
-        except Exception as exc:
-            errors.append(f"Colab: {exc}")
+                    colab_gpu = str(sessions[0].get("hardware") or "").strip()
+                    raw_status = str(sessions[0].get("status") or "ONLINE").strip()
+                else:
+                    colab_state = "STOPPED"
+                    colab_gpu = ""
+                    raw_status = "STOPPED"
+                    idle_remaining = 0
+            except Exception as exc:
+                errors.append(f"ColabCLI: {exc}")
 
-        # 2. GCE Spot instances
+        # 2. GCE Spot instances — never blocked by Drive backoff
         gce_instances, gce_err = await self._fetch_gce_instances()
         if gce_err:
             errors.append(f"GCE: {gce_err}")
             if self._last_snapshot is not None:
                 gce_instances = self._last_snapshot.gce_instances
 
-        # 3. Drive space (cached 300s unless forced)
-        if force or (mono - self._last_about_ts >= self.about_ttl_sec) or self._last_about["total"] is None:
+        # 3. Drive data-plane (`status.json` enrichment & storage quota) — respects Drive backoff
+        drive_status_err: Optional[str] = None
+        if drive_configured and not drive_in_backoff:
             try:
-                about_data = await self.drive.about()
-                self._last_about = {
-                    "used": int(about_data["used"]) if about_data.get("used") is not None else None,
-                    "total": int(about_data["total"]) if about_data.get("total") is not None else None,
-                    "free": int(about_data["free"]) if about_data.get("free") is not None else None,
-                }
-                self._last_about_ts = mono
-            except Exception as exc:
-                errors.append(f"Drive: {exc}")
+                status_text = await self.drive.cat_text(self.colab_status_path)
+                status_json: dict[str, Any] = json.loads(status_text)
+                colab_drive_ok = True
+                d_raw_status = str(status_json.get("status", "")).strip()
+                project = str(status_json.get("project", "")).strip()
+                mode = str(status_json.get("mode", "")).strip()
+                reason = str(status_json.get("reason", "")).strip()
+                updated_str = str(
+                    status_json.get("updated_at") or status_json.get("stopped_at") or ""
+                ).strip()
+                webui_url = str(status_json.get("webui_url") or status_json.get("api_url") or "").strip()
 
-        if not colab_ok and self._last_snapshot is not None:
-            err_msg = "; ".join(errors) if errors else "Colab probe failed"
-            self._error_streak += 1
-            self._last_error_kind = self._classify_error_kind(err_msg)
-            self._last_error = err_msg
-            self._next_allowed_epoch = now_ep + self.next_backoff_seconds()
-            self._save_backoff()
-            self._in_backoff_skip = self._last_error_kind == "rate_limit"
+                parsed_ts = parse_colab_timestamp(updated_str)
+                if parsed_ts is not None:
+                    age_seconds = max(0, int((now - parsed_ts).total_seconds()))
+
+                if colab_ctrl_ok:
+                    colab_source = "hybrid"
+                    if colab_state == "ONLINE":
+                        if (
+                            d_raw_status.upper() == "ONLINE"
+                            and age_seconds is not None
+                            and age_seconds <= STALE_THRESHOLD_SECONDS
+                            and status_json.get("idle_seconds") is not None
+                        ):
+                            idle_sec = int(status_json.get("idle_seconds") or 0)
+                            idle_remaining = max(0, IDLE_LIMIT_SECONDS - idle_sec)
+                else:
+                    raw_status = d_raw_status
+                    if raw_status.upper().startswith("STOPPED"):
+                        colab_state = "STOPPED"
+                        idle_remaining = 0
+                    elif raw_status.upper() == "ONLINE":
+                        if age_seconds is None or age_seconds > STALE_THRESHOLD_SECONDS:
+                            colab_state = "STALE_OFFLINE"
+                        else:
+                            colab_state = "ONLINE"
+                        idle_sec = int(status_json.get("idle_seconds") or 0)
+                        idle_remaining = max(0, IDLE_LIMIT_SECONDS - idle_sec)
+                    else:
+                        colab_state = raw_status or "UNKNOWN"
+            except Exception as exc:
+                drive_status_err = f"Drive: {exc}" if colab_ctrl_ok else f"Colab: {exc}"
+                errors.append(drive_status_err)
+
+            if force or (mono - self._last_about_ts >= self.about_ttl_sec) or self._last_about["total"] is None:
+                try:
+                    about_data = await self.drive.about()
+                    if isinstance(about_data, dict) and any(
+                        about_data.get(k) is not None for k in ("used", "total", "free")
+                    ):
+                        self._last_about = {
+                            "used": int(about_data["used"]) if about_data.get("used") is not None else None,
+                            "total": int(about_data["total"]) if about_data.get("total") is not None else None,
+                            "free": int(about_data["free"]) if about_data.get("free") is not None else None,
+                        }
+                        self._last_about_ts = mono
+                except Exception as exc:
+                    errors.append(f"Drive: {exc}")
+
+            if colab_drive_ok:
+                self._reset_drive_backoff()
+            elif drive_status_err:
+                self._record_drive_failure(drive_status_err, now_ep)
+        elif drive_configured and drive_in_backoff:
+            errors.append(f"Drive: {self._last_error or 'Drive backoff cooldown active'}")
+            if self._last_snapshot is not None:
+                project = self._last_snapshot.project
+                mode = self._last_snapshot.mode
+                reason = self._last_snapshot.reason
+                updated_str = self._last_snapshot.updated_at
+                webui_url = self._last_snapshot.webui_url
+
+        if colab_ctrl_ok:
+            snap = ColabGcpSnapshot(
+                fetched_at=now_iso,
+                colab_state=colab_state,
+                raw_status=raw_status,
+                project=project,
+                mode=mode,
+                reason=reason,
+                updated_at=updated_str,
+                age_seconds=age_seconds,
+                idle_remaining_seconds=idle_remaining,
+                webui_url=webui_url,
+                gce_instances=gce_instances,
+                drive_used_bytes=self._last_about["used"],
+                drive_total_bytes=self._last_about["total"],
+                drive_free_bytes=self._last_about["free"],
+                rclone_readonly=bool(caps.get("readonly", False)),
+                rclone_shared_client_id=bool(caps.get("shared_client_id", False)),
+                drive_backend=drive_backend,
+                colab_sessions_count=colab_sessions_count,
+                colab_gpu=colab_gpu,
+                colab_source=colab_source,
+                error="; ".join(errors) if errors else None,
+                stale=False,
+            )
+            self._last_snapshot = snap
+            return snap
+
+        # Legacy Drive-only fallback path (control plane unavailable or unconfigured)
+        if not colab_drive_ok and self._last_snapshot is not None:
             return ColabGcpSnapshot(
                 fetched_at=now_iso,
                 colab_state="DEGRADED",
@@ -330,24 +436,13 @@ class CloudProbe:
                 drive_free_bytes=self._last_about["free"],
                 rclone_readonly=bool(caps.get("readonly", False)),
                 rclone_shared_client_id=bool(caps.get("shared_client_id", False)),
-                error=err_msg,
+                drive_backend=drive_backend,
+                colab_sessions_count=self._last_snapshot.colab_sessions_count,
+                colab_gpu=self._last_snapshot.colab_gpu,
+                colab_source="drive",
+                error="; ".join(errors) if errors else "Colab probe failed",
                 stale=True,
             )
-
-        err_joined = "; ".join(errors) if errors else None
-        if colab_ok:
-            self._error_streak = 0
-            self._next_allowed_epoch = 0.0
-            self._last_error_kind = ""
-            self._last_error = ""
-            self._save_backoff()
-        else:
-            self._error_streak += 1
-            self._last_error_kind = self._classify_error_kind(err_joined or "")
-            self._last_error = err_joined or "Colab probe failed"
-            self._next_allowed_epoch = now_ep + self.next_backoff_seconds()
-            self._save_backoff()
-            self._in_backoff_skip = self._last_error_kind == "rate_limit"
 
         snap = ColabGcpSnapshot(
             fetched_at=now_iso,
@@ -366,9 +461,13 @@ class CloudProbe:
             drive_free_bytes=self._last_about["free"],
             rclone_readonly=bool(caps.get("readonly", False)),
             rclone_shared_client_id=bool(caps.get("shared_client_id", False)),
+            drive_backend=drive_backend,
+            colab_sessions_count=colab_sessions_count,
+            colab_gpu=colab_gpu,
+            colab_source="drive",
             error="; ".join(errors) if errors else None,
-            stale=not colab_ok,
+            stale=not colab_drive_ok,
         )
-        if colab_ok:
+        if colab_drive_ok:
             self._last_snapshot = snap
         return snap

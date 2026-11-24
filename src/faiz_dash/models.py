@@ -118,6 +118,10 @@ class ColabGcpSnapshot:
     drive_free_bytes: Optional[int] = None
     rclone_readonly: bool = False
     rclone_shared_client_id: bool = False
+    drive_backend: str = "rclone"
+    colab_sessions_count: Optional[int] = None
+    colab_gpu: str = ""
+    colab_source: str = "drive"
     error: Optional[str] = None
     stale: bool = False
 

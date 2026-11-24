@@ -16,7 +16,9 @@ from textual.widgets import Static
 from ..collectors.cloud_probe import CloudProbe
 from ..collectors.mailbox_probe import MailboxProbe
 from ..collectors.usage_probe import UsageProbe
-from ..gateways.drive import RcloneDriveGateway
+from ..gateways.colab import ColabCliGateway
+from ..gateways.drive import create_drive_gateway
+from ..statusline_config import get_cloud_settings
 from ..store import StateStore, read_backoff_remaining
 from .layout import PANEL_IDS, PANEL_TITLES, LayoutManager
 from .widgets import ColabPanel, MailboxPanel, QuotaPanel
@@ -73,13 +75,21 @@ class FaizControlCenterApp(App[None]):
         if preset in (1, 2):
             self.layout_manager.preset = preset
 
-        drive = RcloneDriveGateway(semaphore=self.semaphore)
+        cloud_cfg = get_cloud_settings()
+        drive = create_drive_gateway(
+            preferred=cloud_cfg.get("drive_backend", "auto"),
+            remote=cloud_cfg.get("rclone_remote", "gdrive"),
+            semaphore=self.semaphore,
+            id_cache_path=self.store.cache_dir / "gdrive_folder_ids.json",
+        )
+        colab_gw = ColabCliGateway(semaphore=self.semaphore)
         self.usage_probe = usage_probe or UsageProbe(
             cache_dir=self.store.cache_dir,
             semaphore=self.semaphore,
         )
         self.cloud_probe = cloud_probe or CloudProbe(
             drive,
+            colab_gateway=colab_gw,
             semaphore=self.semaphore,
             backoff_path=self.store.cache_dir / "cloud_backoff.json",
         )

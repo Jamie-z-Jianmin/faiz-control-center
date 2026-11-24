@@ -53,6 +53,7 @@ class ColabPanel(Static):
         }.get(snap.colab_state, "cyan")
 
         age_str = f" ({snap.age_seconds}s)" if snap.age_seconds is not None else ""
+        gpu_str = f" [{escape(snap.colab_gpu)}]" if snap.colab_gpu else ""
         mode_str = f" [{escape(snap.mode)}]" if snap.mode else ""
         cached_hint = f" (prev:{escape(snap.raw_status)})" if snap.colab_state == "DEGRADED" and snap.raw_status else ""
 
@@ -78,19 +79,22 @@ class ColabPanel(Static):
             pct = (snap.drive_used_bytes / snap.drive_total_bytes) * 100.0
             pct_str = f" ({pct:.1f}%)"
 
-        flags: list[str] = []
-        if snap.rclone_readonly:
-            flags.append("RO")
-        if snap.rclone_shared_client_id:
-            flags.append("shared_id_2026")
-        flag_line = (
-            f"[yellow]! rclone: {' | '.join(flags)}[/yellow]"
-            if flags
-            else "[green]rclone: custom OAuth OK[/green]"
-        )
+        if snap.drive_backend == "gdrive":
+            flag_line = "[green]gdrive: custom OAuth OK[/green]"
+        else:
+            flags: list[str] = []
+            if snap.rclone_readonly:
+                flags.append("RO")
+            if snap.rclone_shared_client_id:
+                flags.append("shared_id_2026")
+            flag_line = (
+                f"[yellow]! rclone: {' | '.join(flags)}[/yellow]"
+                if flags
+                else "[green]rclone: custom OAuth OK[/green]"
+            )
 
         lines = [
-            f"Colab: [{state_style}]{escape(snap.colab_state)}[/{state_style}]{age_str}{mode_str}{cached_hint}",
+            f"Colab: [{state_style}]{escape(snap.colab_state)}[/{state_style}]{gpu_str}{age_str}{mode_str}{cached_hint}",
             f"Idle: {idle_disp} | {escape((snap.project or '-')[:20])}",
             f"GCE: {gce_str}",
             f"Drive: {_fmt_bytes(snap.drive_used_bytes)} / {_fmt_bytes(snap.drive_total_bytes)}{pct_str}",

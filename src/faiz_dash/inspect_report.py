@@ -316,18 +316,25 @@ def _render_cloud_section(
     used_b = _format_bytes(cloud.get("drive_used_bytes"))
     total_b = _format_bytes(cloud.get("drive_total_bytes"))
     free_b = _format_bytes(cloud.get("drive_free_bytes"))
-    flags: list[str] = []
-    if cloud.get("rclone_readonly"):
-        flags.append("RO")
-    if cloud.get("rclone_shared_client_id"):
-        flags.append("shared_client_id")
-    rclone_txt = ", ".join(flags) if flags else "custom OAuth OK"
+    backend = str(cloud.get("drive_backend") or "rclone")
+    if backend == "gdrive":
+        backend_txt = "gdrive: custom OAuth OK"
+    else:
+        flags: list[str] = []
+        if cloud.get("rclone_readonly"):
+            flags.append("RO")
+        if cloud.get("rclone_shared_client_id"):
+            flags.append("shared_client_id")
+        backend_txt = f"rclone: {', '.join(flags)}" if flags else "rclone: custom OAuth OK"
     cd_txt = _format_duration(backoff_sec) if backoff_sec > 0 else "0s"
+    src_tag = str(cloud.get("colab_source") or "drive")
+    gpu_tag = str(cloud.get("colab_gpu") or "").strip()
+    gpu_part = f" | GPU: `{gpu_tag}`" if gpu_tag else ""
 
     lines = [
-        f"### 2. Cloud, GCE & Drive Sync (`{state}` | age `{age_txt}`)",
-        f"- Colab Idle Left: `{idle}` | GCE: `{gce_txt}` | Backoff Cooldown: `{cd_txt}`",
-        f"- Drive: `{used_b} / {total_b}` (free `{free_b}`) | rclone: `{rclone_txt}`",
+        f"### 2. Cloud, GCE & Drive Sync (`{state}` | source `{src_tag}` | age `{age_txt}`)",
+        f"- Colab Idle Left: `{idle}`{gpu_part} | GCE: `{gce_txt}` | Backoff Cooldown: `{cd_txt}`",
+        f"- Drive: `{used_b} / {total_b}` (free `{free_b}`) | `{backend_txt}`",
     ]
     err_sum = cloud.get("error_summary") or ""
     if err_sum:

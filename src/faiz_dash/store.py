@@ -310,6 +310,10 @@ class StateStore:
                     drive_free_bytes=c.get("drive_free_bytes"),
                     rclone_readonly=bool(c.get("rclone_readonly", False)),
                     rclone_shared_client_id=bool(c.get("rclone_shared_client_id", False)),
+                    drive_backend=str(c.get("drive_backend", "rclone")),
+                    colab_sessions_count=c.get("colab_sessions_count"),
+                    colab_gpu=str(c.get("colab_gpu", "")),
+                    colab_source=str(c.get("colab_source", "drive")),
                     error=c.get("error"),
                     stale=bool(c.get("stale", False)),
                 )
@@ -391,7 +395,8 @@ class StateStore:
                 if str(inst.get("status", "")).upper() in {"RUNNING", "STAGING"}
             )
             err_upper = (cloud.error or "").upper()
-            cloud_ok = cloud.colab_state != "DEGRADED" and not cloud.stale
+            ctrl_confirmed = cloud.colab_source in {"colab_cli", "hybrid"} and cloud.colab_state in {"ONLINE", "STOPPED"}
+            cloud_ok = (ctrl_confirmed or not cloud.stale) and cloud.colab_state != "DEGRADED"
             cloud_error_kind = (
                 "rate_limit"
                 if ("RATE_LIMIT" in err_upper or "RATELIMIT" in err_upper)

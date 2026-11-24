@@ -12,7 +12,8 @@ from typing import Optional
 from .collectors.cloud_probe import CloudProbe
 from .collectors.mailbox_probe import MailboxProbe
 from .collectors.usage_probe import UsageProbe
-from .gateways.drive import RcloneDriveGateway
+from .gateways.colab import ColabCliGateway
+from .gateways.drive import create_drive_gateway
 from .inspect_report import collect_inspect_payload, format_inspect_output
 from .statusline_config import (
     CAPSULE_COLOR_KEYS,
@@ -29,6 +30,7 @@ from .statusline_config import (
     VALID_SECONDARY_METRICS,
     VALID_STYLES,
     VALID_THEMES,
+    get_cloud_settings,
     load_statusline_config,
     read_auto_dock_enabled,
     save_statusline_config,
@@ -46,7 +48,14 @@ async def _collect_live_store(
 ) -> StateStore:
     sem = asyncio.Semaphore(3)
     store = StateStore(cache_dir=cache_dir or (Path.home() / ".agents" / "cache"))
-    drive = RcloneDriveGateway(semaphore=sem)
+    cloud_cfg = get_cloud_settings()
+    drive = create_drive_gateway(
+        preferred=cloud_cfg.get("drive_backend", "auto"),
+        remote=cloud_cfg.get("rclone_remote", "gdrive"),
+        semaphore=sem,
+        id_cache_path=store.cache_dir / "gdrive_folder_ids.json",
+    )
+    colab_gw = ColabCliGateway(semaphore=sem)
     usage = UsageProbe(cache_dir=store.cache_dir, semaphore=sem)
 
     async def _collect_and_publish_quota() -> None:
@@ -57,13 +66,20 @@ async def _collect_live_store(
         await _collect_and_publish_quota()
         return store
 
-    cloud = CloudProbe(drive, semaphore=sem, backoff_path=store.cache_dir / "cloud_backoff.json")
+    cloud = CloudProbe(
+        drive,
+        colab_gateway=colab_gw,
+        semaphore=sem,
+        backoff_path=store.cache_dir / "cloud_backoff.json",
+    )
     mailbox = MailboxProbe(drive)
 
     async def _collect_cloud_and_mailbox() -> None:
         cloud_snap = await cloud.collect(force=False)
+        drive_caps = drive.capabilities()
         skip_mbox = (
             cloud_snap.colab_state == "NOT_CONFIGURED"
+            or drive_caps.get("configured") is False
             or cloud.in_backoff_skip
             or ("RATE_LIMIT" in (cloud_snap.error or "").upper())
         )
