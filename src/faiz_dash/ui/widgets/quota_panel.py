@@ -74,7 +74,9 @@ class QuotaPanel(Static):
         pro_5h = gem.five_hour_pct if gem else None
         pro_5h_ref = _short_refresh(gem.five_hour_refresh) if gem else ""
         pro_wk = gem.weekly_pct if gem else None
+        cla_5h = cla.five_hour_pct if cla else None
         cla_wk = cla.weekly_pct if cla else None
+        cla_ref = _short_refresh(cla.weekly_refresh) if cla else ""
         arg_wk = arg.weekly_pct if arg else None
         arg_ref = _short_refresh(arg.weekly_refresh) if arg else ""
 
@@ -84,13 +86,24 @@ class QuotaPanel(Static):
             "WARN_PRO": "bold red",
         }.get(snap.quota_gate, "cyan")
 
+        if arg is not None:
+            line2 = (
+                f"Argon  {_mini_bar(arg_wk)} {_pct_text(arg_wk)}"
+                + (f" [dim]{escape(arg_ref)}[/dim]" if arg_ref else "")
+                + f" | C/G {_pct_text(cla_wk)}"
+            )
+        else:
+            line2 = (
+                f"Claude {_mini_bar(cla_wk)} {_pct_text(cla_wk)}"
+                + (f" [dim]{escape(cla_ref)}[/dim]" if cla_ref else "")
+                + f" | 5h {_pct_text(cla_5h)}"
+            )
+
         lines = [
             f"Pro 5h {_mini_bar(pro_5h)} {_pct_text(pro_5h)}"
             + (f" [dim]{escape(pro_5h_ref)}[/dim]" if pro_5h_ref else "")
             + f" | Wk {_pct_text(pro_wk)}",
-            f"Argon  {_mini_bar(arg_wk)} {_pct_text(arg_wk)}"
-            + (f" [dim]{escape(arg_ref)}[/dim]" if arg_ref else "")
-            + f" | C/G {_pct_text(cla_wk)}",
+            line2,
             f"Chan: Pro:[bold]{snap.channels.pro_count}[/bold] GCP:[bold]{snap.channels.gcp_count}[/bold]"
             f" | Gate:[{gate_color}]{escape(snap.quota_gate)}[/{gate_color}]",
             f"Burn: 1h [cyan]{_fmt_tokens(snap.burn.tokens_1h)}[/cyan]"

@@ -287,6 +287,41 @@ def parse_usage_text(raw_text: str) -> dict[str, Any]:
     return {"account": account, "buckets": buckets}
 
 
+def _is_usage_frame1_complete(buf: bytes, *, elapsed: float = 0.0) -> bool:
+    """Detect whether Frame 1 of `/usage` output has finished rendering in the PTY buffer."""
+    footer_idx = buf.rfind(b"Within each group")
+    if footer_idx != -1:
+        prefix = buf[:footer_idx]
+        if b"CLAUDE AND GPT MODELS" in prefix or b"GEMINI MODELS" in prefix:
+            last_hdr_end = -1
+            for hdr in (b"GEMINI MODELS", b"CLAUDE AND GPT MODELS", b"GEMINI 4 ARGON"):
+                idx = prefix.rfind(hdr)
+                if idx != -1:
+                    end_pos = idx + len(hdr)
+                    if end_pos > last_hdr_end:
+                        last_hdr_end = end_pos
+            if last_hdr_end != -1:
+                tail = prefix[last_hdr_end:]
+                if b"%" in tail and (b"Refreshes in" in tail or b"Quota available" in tail):
+                    return True
+
+    if b"GEMINI 4 ARGON" in buf:
+        argon_tail = buf[buf.rfind(b"GEMINI 4 ARGON") :]
+        if b"%" in argon_tail and (b"Refreshes in" in argon_tail or b"Quota available" in argon_tail):
+            return True
+
+    if elapsed >= 4.0 and b"CLAUDE AND GPT MODELS" in buf:
+        claude_tail = buf[buf.rfind(b"CLAUDE AND GPT MODELS") :]
+        five_hdr = b"Five Hour Limit Remaining"
+        five_idx = claude_tail.rfind(five_hdr)
+        if five_idx != -1:
+            after_five = claude_tail[five_idx + len(five_hdr) :]
+            if b"%" in after_five and (b"Refreshes in" in after_five or b"Quota available" in after_five):
+                return True
+
+    return False
+
+
 def _read_fresh_usage_cache(cache_path: Path, cooldown_sec: float) -> Optional[dict[str, Any]]:
     if not cache_path.exists():
         return None
@@ -399,11 +434,9 @@ def run_pty_usage_probe(
                     sent = True
 
                 if frame1_seen_at is None:
-                    if sent and b"GEMINI 4 ARGON" in buf:
-                        argon_tail = buf[buf.rfind(b"GEMINI 4 ARGON") :]
-                        if b"%" in argon_tail and (b"Refreshes in" in argon_tail or b"Quota available" in argon_tail):
-                            frame1_seen_at = now
-                            last_chunk_at = now
+                    if sent and _is_usage_frame1_complete(bytes(buf), elapsed=elapsed):
+                        frame1_seen_at = now
+                        last_chunk_at = now
                 else:
                     if chunk:
                         since_f1 = now - frame1_seen_at

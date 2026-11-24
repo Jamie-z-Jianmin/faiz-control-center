@@ -937,6 +937,184 @@ esac
             self.assertTrue(marker.exists())
             self.assertIn("--once-json --quota-only", marker.read_text(encoding="utf-8"))
 
+    def test_statusline_triggers_cloud_bg_with_colab_cli_even_during_drive_backoff(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            (fake_home / ".config" / "colab-cli").mkdir(parents=True)
+            now = time.time()
+            u_file = cache_dir / "usage_snapshot.json"
+            u_file.write_text(
+                json.dumps({"pro_5h_pct": 80.0, "pro_wk_pct": 70.0, "pty_fetched_epoch": int(now)}),
+                encoding="utf-8",
+            )
+            (cache_dir / ".bg_pty_ts").write_text("", encoding="utf-8")
+            c_file = cache_dir / "cloud_snapshot.json"
+            c_file.write_text(json.dumps({"colab_state": "STOPPED", "cloud_ok": True}), encoding="utf-8")
+            os.utime(c_file, (now - 120, now - 120))
+            (cache_dir / "cloud_backoff.json").write_text(
+                json.dumps({"next_allowed_epoch": now + 240}),
+                encoding="utf-8",
+            )
+
+            marker = root / "dash_cloud_args.log"
+            fake_dash = root / "fake-dash"
+            fake_dash.write_text(f"#!/usr/bin/env bash\necho \"$@\" >> {str(marker)!r}\n", encoding="utf-8")
+            fake_dash.chmod(0o755)
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_DASH_BIN": str(fake_dash),
+                "FAIZ_TRANSCRIPT_PATH": "",
+                "FAIZ_TERM_WIDTH": "160",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            env.pop("FAIZ_STATUSLINE_NO_BG", None)
+            res = subprocess.run([str(STATUSLINE_SH)], input=b"{}", env=env, capture_output=True, check=True)
+            deadline = time.monotonic() + 1.5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists())
+            self.assertIn("--once-json --no-pty", marker.read_text(encoding="utf-8"))
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Colab IDLE", plain)
+            self.assertNotIn("LIMIT", plain)
+
+    def test_statusline_two_bucket_claude_replaces_argon_across_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 15.25,
+                        "pro_wk_pct": 42.5,
+                        "claude_5h_pct": 100.0,
+                        "claude_wk_pct": 100.0,
+                        "argon_wk_pct": None,
+                        "quota_gate": "WARN_PRO",
+                        "pro_count": 2,
+                        "gcp_count": 0,
+                        "tokens_1h": 250000,
+                        "pty_fetched_epoch": int(now - 5),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps({"colab_state": "ONLINE", "idle_remaining_seconds": 1800, "mailbox_tasks_count": 0, "mailbox_failed_count": 0}),
+                encoding="utf-8",
+            )
+            t_file = root / "transcript.jsonl"
+            t_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 8))
+            t_e = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 4))
+            t_file.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 1000, "cache_read_tokens": 9000, "output_tokens": 400}),
+                        json.dumps({"step_index": 2, "type": "GENERIC", "status": "DONE", "created_at": t_e}),
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            cfg_file = fake_home / ".agents" / "statusline_config.json"
+            base_env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_STATUSLINE_CONFIG": str(cfg_file),
+                "FAIZ_TRANSCRIPT_PATH": str(t_file),
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            payload = b'{"context_window":{"used_percentage":42}}'
+
+            # 1. Auto wide (180 cols): Claude pill replaces Argon, WARN_PRO preserved, no duplicate 3rd Claude capsule
+            cfg_file.write_text(json.dumps({"density": "auto"}), encoding="utf-8")
+            res_wide = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "180"}, capture_output=True, check=True)
+            plain_wide = re.sub(r"\x1b\[[0-9;]*m", "", res_wide.stdout.decode("utf-8", errors="replace"))
+            lines_wide = plain_wide.splitlines()
+            self.assertEqual(len(lines_wide), 4)
+            self.assertIn("Claude 5h:100.00% · Wk:100.00% Pro!", lines_wide[3])
+            self.assertNotIn("Argon", plain_wide)
+            self.assertEqual(plain_wide.count("Claude"), 1)
+
+            # 2. Auto narrow 90 cols (2x4): stays 4-line aligned matrix, shows Cla/Claude and ! warning, no Argon
+            res_90 = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "90"}, capture_output=True, check=True)
+            plain_90 = re.sub(r"\x1b\[[0-9;]*m", "", res_90.stdout.decode("utf-8", errors="replace"))
+            lines_90 = plain_90.splitlines()
+            self.assertEqual(len(lines_90), 4)
+            self.assertEqual(len({len(ln) for ln in lines_90}), 1)
+            self.assertTrue("Claude " in lines_90[3] or "Cla " in lines_90[3], lines_90[3])
+            self.assertIn("!", lines_90[3])
+            self.assertNotIn("Arg", plain_90)
+
+            # 3. Auto narrow 46 cols (4x2): stays 5-line aligned matrix, shows Cla, no Argon
+            res_46 = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "46"}, capture_output=True, check=True)
+            plain_46 = re.sub(r"\x1b\[[0-9;]*m", "", res_46.stdout.decode("utf-8", errors="replace"))
+            lines_46 = plain_46.splitlines()
+            self.assertEqual(len(lines_46), 5)
+            self.assertEqual(len({len(ln) for ln in lines_46}), 1)
+            self.assertIn("Cla ", lines_46[3])
+            self.assertNotIn("Arg", plain_46)
+
+            # 4. Expanded mode (180 cols): single Claude capsule + WARN_PRO, plus capsule_colors.argon fallback
+            cfg_file.write_text(json.dumps({"density": "expanded", "capsule_colors": {"argon": "green"}}), encoding="utf-8")
+            res_exp = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "180"}, capture_output=True, check=True)
+            out_exp = res_exp.stdout.decode("utf-8", errors="replace")
+            plain_exp = re.sub(r"\x1b\[[0-9;]*m", "", out_exp)
+            self.assertIn("Claude 5h:100.00% · Wk:100.00% (Pro!)", plain_exp)
+            self.assertEqual(plain_exp.count("Claude"), 1)
+            self.assertNotIn("Argon", plain_exp)
+            self.assertIn("27;52;38", out_exp)  # green capsule glass bg from capsule_colors.argon fallback
+
+            # 5. Compact mode: WARN_PRO ! badge on Gem pill, plus Cla when Claude < 99.9% and alert/warn escalation
+            cfg_file.write_text(json.dumps({"density": "compact", "color_mode": "semantic"}), encoding="utf-8")
+            res_cmp_full = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "120"}, capture_output=True, check=True)
+            plain_cmp_full = re.sub(r"\x1b\[[0-9;]*m", "", res_cmp_full.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Gem 15.25/42.50%!", plain_cmp_full)
+            self.assertNotIn("Arg", plain_cmp_full)
+            self.assertNotIn("Cla", plain_cmp_full)
+
+            # Lower Claude below 20% while Pro is healthy -> compact escalates to alert ("64;30;31" + ▲)
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 85.0,
+                        "pro_wk_pct": 90.0,
+                        "claude_5h_pct": 18.5,
+                        "claude_wk_pct": 65.0,
+                        "argon_wk_pct": None,
+                        "quota_gate": "GREEN",
+                        "pty_fetched_epoch": int(now - 5),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            res_cmp_low = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "120"}, capture_output=True, check=True)
+            out_cmp_low = res_cmp_low.stdout.decode("utf-8", errors="replace")
+            plain_cmp_low = re.sub(r"\x1b\[[0-9;]*m", "", out_cmp_low)
+            self.assertIn("Gem 85.00/90.00%·▲18.50%·65.00%", plain_cmp_low)
+            self.assertIn("64;30;31", out_cmp_low)  # alert glass bg
+
+            # 6. Missing Claude & Argon -> no dead Argon -- capsule emitted
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({"pro_5h_pct": 85.0, "pro_wk_pct": 90.0, "argon_wk_pct": None, "quota_gate": "GREEN", "pty_fetched_epoch": int(now - 5)}),
+                encoding="utf-8",
+            )
+            cfg_file.write_text(json.dumps({"density": "expanded"}), encoding="utf-8")
+            res_no_cla = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "160"}, capture_output=True, check=True)
+            plain_no_cla = re.sub(r"\x1b\[[0-9;]*m", "", res_no_cla.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Gemini 5h:85.00% · Wk:90.00%", plain_no_cla)
+            self.assertNotIn("Argon", plain_no_cla)
+            self.assertNotIn("Claude", plain_no_cla)
+
 
 if __name__ == "__main__":
     unittest.main()

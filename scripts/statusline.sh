@@ -178,10 +178,14 @@ if [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ] && [ -x "$DASH_BIN" ]; then
         need_pty=1
     fi
     [ "$c_age" -gt 90 ] && [ "$c_last" -gt 90 ] && need_cloud=1
-    if [ "$need_cloud" -eq 1 ] && [ ! -s "${RCLONE_CONFIG:-$HOME/.config/rclone/rclone.conf}" ] && [ "${FAIZ_ENABLE_CLOUD:-0}" != "1" ]; then
+    if [ "$need_cloud" -eq 1 ] \
+        && [ ! -d "$HOME/.config/colab-cli" ] \
+        && [ ! -e "$HOME/.gemini/antigravity-cli/bin/gdrive" ] \
+        && [ ! -s "${RCLONE_CONFIG:-$HOME/.config/rclone/rclone.conf}" ] \
+        && [ "${FAIZ_ENABLE_CLOUD:-0}" != "1" ]; then
         need_cloud=0
     fi
-    if [ "$need_cloud" -eq 1 ] && [ -s "$backoff_file" ]; then
+    if [ "$need_cloud" -eq 1 ] && [ ! -d "$HOME/.config/colab-cli" ] && [ -s "$backoff_file" ]; then
         b_raw=$(< "$backoff_file")
         if [[ "$b_raw" =~ \"next_allowed_epoch\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -gt "$now_ts" ] 2>/dev/null; then
             need_cloud=0
@@ -404,6 +408,18 @@ if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" == *'"max_width"'
             .[$pi] |
             if ($lvl >= 2) and ($pi == 0) and (.r == "lbl") and (.t == "Gemini ") then
               .t = "Gem "
+            elif (.r == "val") and (.t | test("^[0-9]+\\.[0-9]+%$")) then
+              .t |= ((.[0:-1] | tonumber | round | tostring) + "%")
+            else . end
+          ]
+        )
+      elif .cap_id == "claude" then
+        .parts |= (
+          [
+            range(0; length) as $pi |
+            .[$pi] |
+            if ($lvl >= 2) and ($pi == 0) and (.r == "lbl") and (.t == "Claude ") then
+              .t = "Cla "
             elif (.r == "val") and (.t | test("^[0-9]+\\.[0-9]+%$")) then
               .t |= ((.[0:-1] | tonumber | round | tostring) + "%")
             else . end
@@ -729,13 +745,20 @@ JQ_COMPACT='
     ) |
     (
       if $m_quota then
-        if $pro5 != null or $prowk != null or $arg != null then
+        if $pro5 != null or $prowk != null or $arg != null or $cla5 != null or $cla != null then
           (
             [{t: "Gem ", r: "lbl"}, {t: "\(if $pro5 != null then quota_str($pro5; $q_prec; $tight_quota) else "--" end)/\(if $prowk != null then quota_str($prowk; $q_prec; $tight_quota) else "--" end)%", r: "val"}] +
-            (if $arg != null then [{t: "·", r: "lbl"}, {t: (if ($arg < 20 or $gate == "THROTTLE_ARGON") then "▲" else "Arg " end), r: (if ($arg < 20 or $gate == "THROTTLE_ARGON") then "acc" else "lbl" end)}, {t: "\(quota_str($arg; $q_prec; $tight_quota))%\(if $gate == "WARN_PRO" or $gate == "THROTTLE_ARGON" then "!" else "" end)", r: "val"}] else [] end)
+            (if $arg != null then
+              [{t: "·", r: "lbl"}, {t: (if ($arg < 20 or $gate == "THROTTLE_ARGON") then "▲" else "Arg " end), r: (if ($arg < 20 or $gate == "THROTTLE_ARGON") then "acc" else "lbl" end)}, {t: "\(quota_str($arg; $q_prec; $tight_quota))%\(if $gate == "WARN_PRO" or $gate == "THROTTLE_ARGON" then "!" else "" end)", r: "val"}]
+             else
+              (if $gate == "WARN_PRO" then [{t: $L.warn_pro_c, r: "acc"}] else [] end) +
+              (if $cla_show then
+                [{t: "·", r: "lbl"}, {t: (if ($cla_min != null and $cla_min < 20) then "▲" else "Cla " end), r: (if ($cla_min != null and $cla_min < 20) then "acc" else "lbl" end)}, {t: $cla_val, r: "val"}]
+               else [] end)
+             end)
           ) as $p2_parts |
-          (if $gate == "WARN_PRO" or ($pro5 != null and $pro5 < 20) then "alert"
-           elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($pro5 != null and $pro5 < 40) then "warn"
+          (if $gate == "WARN_PRO" or ($pro5 != null and $pro5 < 20) or ($arg == null and $cla_show and $cla_min != null and $cla_min < 20) then "alert"
+           elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($pro5 != null and $pro5 < 40) or ($arg == null and $cla_show and $cla_min != null and $cla_min < 40) then "warn"
            else "base" end) as $q_slot |
           . + [{cap_id: "gemini", icon: (if $ind == "ring" and $pro5 != null then ring($pro5) else "" end), parts: $p2_parts, slot: $q_slot, tint: ($q_slot != "base")}]
         else
@@ -841,7 +864,7 @@ JQ_MAIN='
   else . end |
 
   if $m_quota then
-    if $pro5 != null or $prowk != null or $arg != null then
+    if $pro5 != null or $prowk != null or $arg != null or $cla5 != null or $cla != null then
       ($use_adaptive_2row and ($eff_cols < 155) and ($q_prec != "int")) as $compact_gem_lbl |
       (if ($cla_tight and $cla_show and $q_prec != "int") then "1dp" else $q_prec end) as $gem_prec |
       (
@@ -880,38 +903,65 @@ JQ_MAIN='
         slot: $g_slot,
         tint: ($g_slot != "base")
       }] |
-      (
-        (if $arg != null then
+      (if $arg != null then
+        (
           (if ($cla_tight and $cla_show and $q_prec != "int") then
             [{t: "Arg ", r: "lbl"}, {t: (if $narrow_4x2 then (if $eff_cols < 50 then "\($arg | round)%" else "\($arg | fmt1)%" end) else "\($arg | fmt1)" end), r: "val"}]
            else
             [{t: (if ($use_adaptive_2row and $cla_show and ($wide_rich | not)) then "Arg " else "Argon " end), r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
             (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
-           end)
-         else [{t: (if ($use_adaptive_2row and $cla_show and ($wide_rich | not)) then "Arg " else "Argon " end), r: "lbl"}, {t: "--", r: "val"}] end) +
-        (if $gate == "WARN_PRO" then [{t: (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then $L.warn_pro_c elif $use_adaptive_2row then $L.warn_pro_2 else $L.warn_pro end), r: "acc"}]
-         elif $gate == "THROTTLE_ARGON" then [{t: (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then $L.thro_c elif $use_adaptive_2row then $L.thro_2 else $L.thro end), r: "acc"}]
-         else [] end) +
-        (if ($use_adaptive_2row and $cla_show) then [{t: (if $wide_rich then " · Claude " else "·Cla " end), r: "lbl"}, {t: $cla_val, r: "val"}] else [] end)
-      ) as $a_parts |
-      (if $gate == "WARN_PRO" or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 20) then "alert"
-       elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 40) then "warn"
-       else "base" end) as $a_slot |
-      . + [{
-        cap_id: "argon",
-        icon: (if $a_slot != "base" then "▲" elif $ind == "ring" and $arg != null then ring($arg) else "" end),
-        parts: $a_parts,
-        slot: $a_slot,
-        tint: ($a_slot != "base")
-      }] |
-      (if ($cla_show and ($use_adaptive_2row | not)) then
-        (if ($cla_min != null and $cla_min < 20) then "alert" elif ($cla_min != null and $cla_min < 40) then "warn" else "base" end) as $cl_slot |
+           end) +
+          (if $gate == "WARN_PRO" then [{t: (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then $L.warn_pro_c elif $use_adaptive_2row then $L.warn_pro_2 else $L.warn_pro end), r: "acc"}]
+           elif $gate == "THROTTLE_ARGON" then [{t: (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then $L.thro_c elif $use_adaptive_2row then $L.thro_2 else $L.thro end), r: "acc"}]
+           else [] end) +
+          (if ($use_adaptive_2row and $cla_show) then [{t: (if $wide_rich then " · Claude " else "·Cla " end), r: "lbl"}, {t: $cla_val, r: "val"}] else [] end)
+        ) as $a_parts |
+        (if $gate == "WARN_PRO" or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 20) then "alert"
+         elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 40) then "warn"
+         else "base" end) as $a_slot |
         . + [{
           cap_id: "argon",
-          icon: (if $ind == "ring" and $cla_min != null then ring($cla_min) else "" end),
-          parts: [{t: "Claude ", r: "lbl"}, {t: $cla_val, r: "val"}],
-          slot: $cl_slot,
-          tint: ($cl_slot != "base")
+          icon: (if $a_slot != "base" then "▲" elif $ind == "ring" and $arg != null then ring($arg) else "" end),
+          parts: $a_parts,
+          slot: $a_slot,
+          tint: ($a_slot != "base")
+        }] |
+        (if ($cla_show and ($use_adaptive_2row | not)) then
+          (if ($cla_min != null and $cla_min < 20) then "alert" elif ($cla_min != null and $cla_min < 40) then "warn" else "base" end) as $cl_slot |
+          . + [{
+            cap_id: "argon",
+            icon: (if $ind == "ring" and $cla_min != null then ring($cla_min) else "" end),
+            parts: [{t: "Claude ", r: "lbl"}, {t: $cla_val, r: "val"}],
+            slot: $cl_slot,
+            tint: ($cl_slot != "base")
+          }]
+         else . end)
+       elif ($cla5 != null or $cla != null) then
+        (if ($narrow_4x2 and ($eff_cols < 50)) then "Cla " else "Claude " end) as $cla_lbl |
+        (
+          (if $compact_gem_lbl then
+            (if $cla5 != null then
+              [{t: $cla_lbl, r: "lbl"}, {t: "\(quota_str($cla5; $gem_prec; $tight_quota))%", r: "val"}]
+             else [{t: $cla_lbl, r: "lbl"}, {t: "--", r: "val"}] end) +
+            (if $cla != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($cla; $gem_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
+           else
+            (if $cla5 != null then
+              [{t: "Claude ", r: "lbl"}, {t: "5h:\(quota_str($cla5; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
+              (if $ind == "bar" then [{t: " \(bar6($cla5))", r: "acc"}] else [] end)
+             else [{t: "Claude ", r: "lbl"}, {t: "5h:--", r: "val"}] end) +
+            (if $cla != null then [{t: " · Wk:", r: "lbl"}, {t: "\(quota_str($cla; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] else [{t: " · Wk:--", r: "lbl"}] end)
+           end) +
+          (if $gate == "WARN_PRO" then [{t: (if $compact_gem_lbl then $L.warn_pro_c elif $use_adaptive_2row then $L.warn_pro_2 else $L.warn_pro end), r: "acc"}] else [] end)
+        ) as $c_parts |
+        (if $gate == "WARN_PRO" or ($cla_min != null and $cla_min < 20) then "alert"
+         elif ($cla_min != null and $cla_min < 40) then "warn"
+         else "base" end) as $c_slot |
+        . + [{
+          cap_id: "claude",
+          icon: (if $c_slot != "base" then "▲" elif $ind == "ring" and $cla_min != null then ring($cla_min) else "" end),
+          parts: $c_parts,
+          slot: $c_slot,
+          tint: ($c_slot != "base")
         }]
        else . end)
     else
@@ -1104,7 +1154,8 @@ JQ_TAIL=' |
     (
       [
         $row[] as $it |
-        ($cap_cols[$it.cap_id // ""] // "auto") as $cap_tok |
+        ($cap_cols[$it.cap_id // ""] // "auto") as $raw_cap_tok |
+        (if ($raw_cap_tok == "auto" or $raw_cap_tok == "") and (($it.cap_id // "") == "claude") then ($cap_cols.argon // "auto") else $raw_cap_tok end) as $cap_tok |
         (if ($cap_tok != "auto") and ($cap_tok != "") then row_token_to_slot($cap_tok)
          elif $color_mode == "semantic" then $it.slot
          elif $row_slot != "" then $row_slot

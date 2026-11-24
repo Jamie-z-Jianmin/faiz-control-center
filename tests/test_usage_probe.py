@@ -14,6 +14,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from faiz_dash.collectors.usage_probe import (
+    _is_usage_frame1_complete,
     collect_transcript_burn,
     parse_ps_eww_channels,
     parse_usage_text,
@@ -60,7 +61,68 @@ Refreshes in 164h 41m
 """
 
 
+SAMPLE_TWO_BUCKET_USAGE_OUTPUT = """
+\x1b[2J\x1b[H└ Models & Quota
+  Account: user@example.com
+
+GEMINI MODELS
+  Models within this group: Gemini 4 Hydrogen, Gemini 3.8 Flash
+
+  Weekly Limit Remaining
+[█████████████████████████████████████████████░░░░░] 90.73%
+Refreshes in 165h 24m
+
+  Five Hour Limit Remaining
+[███████████████████████████████████░░░░░░░░░░░░░░░] 69.09%
+Refreshes in 2h 24m
+
+
+CLAUDE AND GPT MODELS
+  Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B
+
+  Weekly Limit Remaining
+[██████████████████████████████████████████████████] 100.00%
+Quota available
+
+  Five Hour Limit Remaining
+[██████████████████████████████████████████████████] 100.00%
+Quota available
+
+  │Within each group, models share a weekly limit and a 5-hour limit.
+"""
+
+
 class TestUsageProbe(unittest.TestCase):
+    def test_parse_usage_text_two_bucket_sample(self) -> None:
+        parsed = parse_usage_text(SAMPLE_TWO_BUCKET_USAGE_OUTPUT)
+        self.assertEqual(parsed["account"], "user@example.com")
+        buckets = {b["group_name"]: b for b in parsed["buckets"]}
+        self.assertEqual(set(buckets.keys()), {"GEMINI MODELS", "CLAUDE AND GPT MODELS"})
+        self.assertAlmostEqual(buckets["GEMINI MODELS"]["weekly_pct"], 90.73)
+        self.assertAlmostEqual(buckets["GEMINI MODELS"]["five_hour_pct"], 69.09)
+        self.assertAlmostEqual(buckets["CLAUDE AND GPT MODELS"]["weekly_pct"], 100.0)
+        self.assertAlmostEqual(buckets["CLAUDE AND GPT MODELS"]["five_hour_pct"], 100.0)
+
+    def test_is_usage_frame1_complete_variants(self) -> None:
+        # 2-bucket layout with footer
+        self.assertTrue(_is_usage_frame1_complete(SAMPLE_TWO_BUCKET_USAGE_OUTPUT.encode("utf-8"), elapsed=1.5))
+
+        # Legacy 3-bucket layout even without footer
+        legacy_no_footer = SAMPLE_USAGE_OUTPUT.split("Within each group")[0].encode("utf-8")
+        self.assertTrue(_is_usage_frame1_complete(legacy_no_footer, elapsed=1.5))
+
+        # 2-bucket fallback without footer: only triggers when elapsed >= 4.0
+        two_bucket_no_footer = SAMPLE_TWO_BUCKET_USAGE_OUTPUT.split("Within each group")[0].encode("utf-8")
+        self.assertFalse(_is_usage_frame1_complete(two_bucket_no_footer, elapsed=3.9))
+        self.assertTrue(_is_usage_frame1_complete(two_bucket_no_footer, elapsed=4.0))
+
+        # Incomplete frame: headers without %/refresh before footer
+        incomplete = (
+            b"GEMINI MODELS\nCLAUDE AND GPT MODELS\n"
+            b"  Five Hour Limit Remaining\nWithin each group, models share\n"
+        )
+        self.assertFalse(_is_usage_frame1_complete(incomplete, elapsed=5.0))
+        self.assertFalse(_is_usage_frame1_complete(b"Google AI Pro\n", elapsed=5.0))
     def test_parse_usage_text_real_sample(self) -> None:
         parsed = parse_usage_text(SAMPLE_USAGE_OUTPUT)
         self.assertEqual(parsed["account"], "user@example.com")

@@ -270,6 +270,46 @@ class TestTuiPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("stage_b9_failed.tts.json", m_txt)
                 self.assertIn("stage_b11_next.tts.json", m_txt)
 
+    async def test_quota_panel_two_bucket_vs_legacy_three_bucket(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = _build_demo_store(root / "cache")
+            lm = LayoutManager(layout_path=root / "tui_layout.json")
+            app = FaizControlCenterApp(
+                dock=True,
+                preset=1,
+                store=store,
+                layout_manager=lm,
+                enable_background_timers=False,
+            )
+            async with app.run_test(size=(140, 12)) as pilot:
+                await pilot.pause()
+                panel = app.query_one("#panel-quota")
+                legacy_txt = str(panel.render())
+                self.assertIn("Argon", legacy_txt)
+                self.assertIn("C/G", legacy_txt)
+
+                two_bucket = QuotaSnapshot(
+                    fetched_at="2026-11-24T06:00:00Z",
+                    account="user@example.com",
+                    buckets=(
+                        ModelBucketQuota("GEMINI MODELS", ("Gemini 4 Hydrogen",), 90.73, "Refreshes in 165h 24m", 69.09, "Refreshes in 2h 24m"),
+                        ModelBucketQuota("CLAUDE AND GPT MODELS", ("Claude Opus 5.5",), 88.25, "Refreshes in 120h 0m", 70.5, "Refreshes in 3h 10m"),
+                    ),
+                    channels=ProcessChannelInfo(pro_count=1, gcp_count=0),
+                    burn=TokenBurnStats(tokens_1h=1000, tokens_24h=5000, cache_hit_rate=0.8, active_sessions=1),
+                    quota_gate="GREEN",
+                    source="pty",
+                )
+                panel.update_snapshot(two_bucket)  # type: ignore[attr-defined]
+                await pilot.pause()
+                new_txt = str(panel.render())
+                self.assertIn("Claude", new_txt)
+                self.assertIn("88.2%", new_txt)
+                self.assertIn("5h 70.5%", new_txt)
+                self.assertNotIn("Argon", new_txt)
+                self.assertNotIn("C/G", new_txt)
+
 
 if __name__ == "__main__":
     unittest.main()
