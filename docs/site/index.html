@@ -258,7 +258,7 @@
     <header class="topbar">
       <div class="brand">
         <span>Faiz Control Center</span>
-        <span class="brand-pill">faiz-dash v0.1</span>
+        <span class="brand-pill">faiz-dash v0.2</span>
       </div>
       <nav class="nav-links">
         <a href="#features">Features</a>
@@ -278,10 +278,10 @@
       </div>
       <h1>TrueColor StatusLine &amp; Quota Control Center for Antigravity CLI</h1>
       <p class="tagline">
-        Sub-80ms capsule statusLine, activity-aware 45s quota sync matching <code>/usage</code> to two decimal places, zero-clutter <code>/faiz-dash</code> diagnostic bubbles, and an on-demand Textual TUI.
+        Sub-80ms capsule statusLine with 2-bucket <code>Gemini + Claude</code> parity, activity-aware 20s/180s PTY sync matching <code>/usage</code> to two decimal places, zero-clutter <code>/faiz-dash</code> diagnostic bubbles, and an on-demand Textual TUI.
       </p>
       <p class="tagline-zh">
-        专为 Antigravity CLI (<code>agy</code>) 打造的极速 (&lt;80ms) TrueColor 状态栏：两位小数配额逐位对齐、活跃对话 45 秒感知刷新、无占屏气泡诊断与按需 Rex 侧边栏。
+        专为 Antigravity CLI (<code>agy</code>) 打造的极速 (&lt;80ms) TrueColor 状态栏：<code>Gemini + Claude</code> 双组两位小数配额对齐、活跃对话 20s / 空闲 180s 感知刷新、无占屏气泡诊断与按需 Rex 侧边栏。
       </p>
 
       <div class="install-box">
@@ -305,19 +305,19 @@
       <div class="grid-2">
         <div class="card">
           <h3>&lt;80ms Responsive Matrix StatusLine</h3>
-          <p>Pure Bash + <code>jq</code> renders sub-80ms telemetry in unified deep slate-blue: wide <code>2&times;4</code> bento spread (<code>&gt;=155c</code>), compact 4-line <code>2&times;4</code> glass (<code>88–154c</code>), tight 5-line <code>4&times;2</code> slate-blue <code>[ ... ]</code> outline (<code>46–86c</code>), plus per-capsule color overrides (<code>capsule_colors</code>) and Apple Terminal 16-color fallback.</p>
+          <p>Pure Bash + <code>jq</code> renders sub-80ms 2-bucket <code>Gemini + Claude</code> telemetry in unified deep slate-blue: wide <code>2&times;4</code> bento spread (<code>&gt;=155c</code>), compact 4-line <code>2&times;4</code> glass (<code>88–154c</code>), tight 5-line <code>4&times;2</code> slate-blue <code>[ ... ]</code> outline (<code>46–86c</code>), plus per-capsule color overrides (<code>capsule_colors</code>) and Apple Terminal 16-color fallback.</p>
         </div>
         <div class="card">
-          <h3>Exact 2dp /usage Sync (45s Active)</h3>
-          <p>Isolated PTY probe guarded by <code>flock</code> and <code>rfind()</code> tail-frame parsing prevents TUI repaint tearing. Refreshes every 45s during active turns and idles cleanly at 180s.</p>
+          <h3>Exact 2dp /usage Sync (20s Active / 180s Idle)</h3>
+          <p>Isolated PTY probe guarded by <code>flock</code> uses dynamic <code>Within each group</code> + <code>rfind()</code> tail-frame parsing for fast convergence without TUI repaint tearing across <code>GEMINI MODELS</code> and <code>CLAUDE AND GPT MODELS</code>. Refreshes every 20s during active turns and idles cleanly at 180s.</p>
         </div>
         <div class="card">
           <h3>Zero-Clutter Bubbles &amp; Rex Sidebar</h3>
           <p>Run <code>/faiz-dash</code> or <code>faiz-dash inspect</code> for full diagnostics in chat with zero column overhead, or toggle an on-demand 28% Rex right sidebar via <code>faiz-dash side</code>.</p>
         </div>
         <div class="card">
-          <h3>Local-First, Optional Cloud Swarm</h3>
-          <p>Works out of the box with zero cloud config. When <code>rclone.conf</code> is present, unlocks Colab runtime heartbeats, GCE Spot tracking, Drive rate-limit backoff, and job verification.</p>
+          <h3>Dual-Plane Cloud &amp; Worker Swarm</h3>
+          <p>Works out of the box with zero cloud config. Decouples the <code>google-colab-cli</code> control plane (active sessions, GPU hardware, compute balance) from the <code>gdrive</code> CLI / <code>rclone</code> Drive data plane (<code>FAIZ_DRIVE_BACKEND=auto|gdrive|rclone</code>), adding GCE Spot tracking, Drive rate-limit backoff, and job verification.</p>
         </div>
       </div>
     </section>
