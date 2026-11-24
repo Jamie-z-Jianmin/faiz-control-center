@@ -81,7 +81,7 @@ I18N: dict[str, dict[str, Any]] = {
             "cache": "Prompt Cache Hit & TTL",
             "speed": "Live Token Rate (t/s)",
             "quota": "Model Quotas & Gate",
-            "sessions": "Active Pro & GCP Sessions",
+            "sessions": "Session Burn / Reset / Sessions",
             "colab": "Colab & GCE Runtime",
             "mailbox": "Mailbox Task Queue",
             "freshness": "Sync Freshness Tag",
@@ -137,7 +137,7 @@ I18N: dict[str, dict[str, Any]] = {
             "cache": "缓存命中与冷却 / Cache",
             "speed": "实时生成速率 / Token Rate",
             "quota": "模型配额与门禁 / Quota & Gate",
-            "sessions": "活跃通道进程 / Pro & GCP",
+            "sessions": "本话消耗 / 重置 / 会话",
             "colab": "Colab 与 GCE / Cloud",
             "mailbox": "任务队列 / Mailbox Queue",
             "freshness": "同步状态尾标 / Freshness",
@@ -367,7 +367,7 @@ class StatuslineConfigApp(App[None]):
                     yield Label(t["secondary_label"], id="lbl-secondary", classes="color-label")
                     yield Select(
                         [
-                            ("1h Token Burn (Default)", "burn"),
+                            ("Session / 1h Burn (Default)", "burn"),
                             ("5h Quota Reset", "reset"),
                             ("CLI Sessions", "sessions"),
                         ],

@@ -1115,6 +1115,248 @@ esac
             self.assertNotIn("Argon", plain_no_cla)
             self.assertNotIn("Claude", plain_no_cla)
 
+    def test_statusline_new_session_ignores_previous_brain_transcript_and_shows_zero_burn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp)
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+
+            old_dir = fake_home / ".gemini" / "antigravity-cli" / "brain" / "old-conv" / ".system_generated" / "logs"
+            old_dir.mkdir(parents=True)
+            t_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10))
+            (old_dir / "transcript.jsonl").write_text(
+                json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 10975758, "cache_read_tokens": 0, "output_tokens": 50}) + "\n",
+                encoding="utf-8",
+            )
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 35.92,
+                        "pro_wk_pct": 82.37,
+                        "claude_5h_pct": 100.0,
+                        "claude_wk_pct": 10.27,
+                        "tokens_1h": 2631796,
+                        "pty_fetched_epoch": int(now),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            env.pop("FAIZ_TRANSCRIPT_PATH", None)
+            env.pop("FAIZ_TERM_WIDTH", None)
+
+            # Case A: empty conversation_id before first prompt (90 cols)
+            payload_a = json.dumps(
+                {
+                    "conversation_id": "",
+                    "context_window": {"used_percentage": 0, "total_input_tokens": 0, "total_output_tokens": 0},
+                    "terminal_width": 90,
+                }
+            ).encode("utf-8")
+            res_a = subprocess.run([str(STATUSLINE_SH)], input=payload_a, env=env, capture_output=True, check=True)
+            plain_a = re.sub(r"\x1b\[[0-9;]*m", "", res_a.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Ctx 0%", plain_a)
+            self.assertIn("Burn 0", plain_a)
+            self.assertNotIn("10.98M", plain_a)
+            self.assertNotIn("2.6M", plain_a)
+            self.assertNotIn("Cache", plain_a)
+            self.assertNotIn("Speed", plain_a)
+
+            # Case B: new conversation_id assigned, transcript_path not yet written
+            payload_b = json.dumps(
+                {
+                    "session_id": "new-conv",
+                    "conversation_id": "new-conv",
+                    "transcript_path": str(fake_home / ".gemini" / "antigravity-cli" / "brain" / "new-conv" / ".system_generated" / "logs" / "transcript.jsonl"),
+                    "context_window": {"used_percentage": 0, "total_input_tokens": 0, "total_output_tokens": 0},
+                }
+            ).encode("utf-8")
+
+            res_b90 = subprocess.run([str(STATUSLINE_SH)], input=payload_b, env={**env, "FAIZ_TERM_WIDTH": "90"}, capture_output=True, check=True)
+            plain_b90 = re.sub(r"\x1b\[[0-9;]*m", "", res_b90.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Ctx 0%", plain_b90)
+            self.assertIn("Burn 0", plain_b90)
+            self.assertNotIn("10.98M", plain_b90)
+            self.assertNotIn("Cache", plain_b90)
+            self.assertNotIn("Speed", plain_b90)
+
+            res_b180 = subprocess.run([str(STATUSLINE_SH)], input=payload_b, env={**env, "FAIZ_TERM_WIDTH": "180"}, capture_output=True, check=True)
+            plain_b180 = re.sub(r"\x1b\[[0-9;]*m", "", res_b180.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Context 0%", plain_b180)
+            self.assertIn("Session 0 · 1h:2.6M", plain_b180)
+            self.assertNotIn("10.98M", plain_b180)
+            self.assertNotIn("Cache", plain_b180)
+            self.assertNotIn("Speed", plain_b180)
+
+            # Case C: small decimal used_percentage (0.5) or >=1% with explicit total_input_tokens: 0 must NOT fall back to ls -1t
+            for pct in (0.5, 1.5):
+                payload_c = json.dumps(
+                    {
+                        "conversation_id": "",
+                        "context_window": {"used_percentage": pct, "total_input_tokens": 0, "total_output_tokens": 0},
+                        "terminal_width": 90,
+                    }
+                ).encode("utf-8")
+                res_c = subprocess.run([str(STATUSLINE_SH)], input=payload_c, env=env, capture_output=True, check=True)
+                plain_c = re.sub(r"\x1b\[[0-9;]*m", "", res_c.stdout.decode("utf-8", errors="replace"))
+                self.assertIn("Burn 0", plain_c)
+                self.assertNotIn("10.98M", plain_c)
+                self.assertNotIn("Cache", plain_c)
+                self.assertNotIn("Speed", plain_c)
+
+    def test_statusline_concurrent_session_isolation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp)
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            t_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10))
+            t_u = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 2))
+
+            dir_a = fake_home / ".gemini" / "antigravity-cli" / "brain" / "conv-a" / ".system_generated" / "logs"
+            dir_b = fake_home / ".gemini" / "antigravity-cli" / "brain" / "conv-b" / ".system_generated" / "logs"
+            dir_a.mkdir(parents=True)
+            dir_b.mkdir(parents=True)
+            t_a = dir_a / "transcript.jsonl"
+            t_b = dir_b / "transcript.jsonl"
+
+            t_a.write_text(
+                json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 1000, "cache_read_tokens": 9000, "output_tokens": 500}) + "\n",
+                encoding="utf-8",
+            )
+            t_b.write_text(
+                json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 10000, "cache_read_tokens": 90000, "output_tokens": 2000}) + "\n",
+                encoding="utf-8",
+            )
+            os.utime(t_a, (now - 5, now - 5))
+            os.utime(t_b, (now - 5, now - 5))
+
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_DASH_BIN": "/nonexistent-dash",
+                "FAIZ_TERM_WIDTH": "180",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            env.pop("FAIZ_STATUSLINE_NO_BG", None)
+            env.pop("FAIZ_TRANSCRIPT_PATH", None)
+
+            pay_a = json.dumps({"conversation_id": "conv-a", "transcript_path": str(t_a), "context_window": {"used_percentage": 20}}).encode("utf-8")
+            pay_b = json.dumps({"conversation_id": "conv-b", "transcript_path": str(t_b), "context_window": {"used_percentage": 30}}).encode("utf-8")
+
+            res_a1 = subprocess.run([str(STATUSLINE_SH)], input=pay_a, env=env, capture_output=True, check=True)
+            plain_a1 = re.sub(r"\x1b\[[0-9;]*m", "", res_a1.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Speed 100 tok/s", plain_a1)
+            self.assertIn("Session 1.5K", plain_a1)
+
+            res_b1 = subprocess.run([str(STATUSLINE_SH)], input=pay_b, env=env, capture_output=True, check=True)
+            plain_b1 = re.sub(r"\x1b\[[0-9;]*m", "", res_b1.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Speed 400 tok/s", plain_b1)
+            self.assertIn("Session 12.0K", plain_b1)
+
+            spd_a = cache_dir / ".speed_conv-a.json"
+            spd_b = cache_dir / ".speed_conv-b.json"
+            burn_a = cache_dir / ".session_burn_conv-a"
+            burn_b = cache_dir / ".session_burn_conv-b"
+            deadline = time.monotonic() + 1.5
+            while (not spd_a.exists() or not spd_b.exists()) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(spd_a.exists())
+            self.assertTrue(spd_b.exists())
+            self.assertTrue(burn_a.exists())
+            self.assertTrue(burn_b.exists())
+            burn_b_before = burn_b.read_text(encoding="utf-8")
+
+            # Append USER_INPUT to both so speed relies on per-session speed cache for step_index=1
+            with t_a.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"step_index": 2, "type": "USER_INPUT", "created_at": t_u}) + "\n")
+                fh.write(json.dumps({"step_index": 3, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_u, "input_tokens": 5000, "cache_read_tokens": 5000, "output_tokens": 0}) + "\n")
+            with t_b.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"step_index": 2, "type": "USER_INPUT", "created_at": t_u}) + "\n")
+
+            res_a2 = subprocess.run([str(STATUSLINE_SH)], input=pay_a, env=env, capture_output=True, check=True)
+            plain_a2 = re.sub(r"\x1b\[[0-9;]*m", "", res_a2.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Speed 100 tok/s", plain_a2)
+            self.assertNotIn("400 tok/s", plain_a2)
+            self.assertIn("Session 6.5K", plain_a2)
+
+            res_b2 = subprocess.run([str(STATUSLINE_SH)], input=pay_b, env=env, capture_output=True, check=True)
+            plain_b2 = re.sub(r"\x1b\[[0-9;]*m", "", res_b2.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Speed 400 tok/s", plain_b2)
+            self.assertNotIn("100 tok/s", plain_b2)
+            self.assertIn("Session 12.0K", plain_b2)
+            self.assertEqual(burn_b.read_text(encoding="utf-8").split("\t")[2], burn_b_before.split("\t")[2])
+
+    def test_statusline_partial_trailing_jsonl_and_large_tail_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp)
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            t_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10))
+            t_e = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 5))
+
+            t_small = fake_home / "small_partial.jsonl"
+            t_small.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 2000, "cache_read_tokens": 18000, "output_tokens": 500}),
+                        json.dumps({"step_index": 2, "type": "GENERIC", "status": "DONE", "created_at": t_e}),
+                    ]
+                )
+                + '\n{"step_index": 3, "type": "PLANNER_RESPONSE", "status": ',
+                encoding="utf-8",
+            )
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_TRANSCRIPT_PATH": str(t_small),
+                "FAIZ_TERM_WIDTH": "180",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            payload = json.dumps({"context_window": {"used_percentage": 25}}).encode("utf-8")
+            res_small = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
+            plain_small = re.sub(r"\x1b\[[0-9;]*m", "", res_small.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Context 25%", plain_small)
+            self.assertIn("Cache 90.0%", plain_small)
+            self.assertIn("Speed 100 tok/s", plain_small)
+            self.assertIn("Session 2.5K", plain_small)
+
+            # Large transcript (>32KB) with 55 GENERIC lines after PLANNER_RESPONSE + truncated trailing line
+            t_large = fake_home / "large_partial.jsonl"
+            pad_blob = "x" * 700
+            lines = [
+                json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 2000, "cache_read_tokens": 18000, "output_tokens": 500}),
+            ]
+            for idx in range(2, 58):
+                lines.append(json.dumps({"step_index": idx, "type": "GENERIC", "status": "DONE", "created_at": t_e, "pad": pad_blob}))
+            t_large.write_text("\n".join(lines) + '\n{"step_index": 58, "type": "PLANNER_', encoding="utf-8")
+            self.assertGreater(t_large.stat().st_size, 32768)
+
+            res_large = subprocess.run(
+                [str(STATUSLINE_SH)],
+                input=payload,
+                env={**env, "FAIZ_TRANSCRIPT_PATH": str(t_large)},
+                capture_output=True,
+                check=True,
+            )
+            plain_large = re.sub(r"\x1b\[[0-9;]*m", "", res_large.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Context 25%", plain_large)
+            self.assertIn("Cache 90.0%", plain_large)
+            self.assertIn("Speed 100 tok/s", plain_large)
+            self.assertIn("Session 2.5K", plain_large)
+
 
 if __name__ == "__main__":
     unittest.main()

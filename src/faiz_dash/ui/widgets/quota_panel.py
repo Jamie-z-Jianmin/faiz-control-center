@@ -106,7 +106,7 @@ class QuotaPanel(Static):
             line2,
             f"Chan: Pro:[bold]{snap.channels.pro_count}[/bold] GCP:[bold]{snap.channels.gcp_count}[/bold]"
             f" | Gate:[{gate_color}]{escape(snap.quota_gate)}[/{gate_color}]",
-            f"Burn: 1h [cyan]{_fmt_tokens(snap.burn.tokens_1h)}[/cyan]"
+            f"Global Burn: 1h [cyan]{_fmt_tokens(snap.burn.tokens_1h)}[/cyan]"
             f" | 24h [cyan]{_fmt_tokens(snap.burn.tokens_24h)}[/cyan]"
             f" | Cache [bold]{snap.burn.cache_hit_rate * 100:.0f}%[/bold]",
         ]

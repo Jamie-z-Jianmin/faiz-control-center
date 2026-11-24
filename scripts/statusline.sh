@@ -11,17 +11,28 @@
 CACHE_DIR="$HOME/.agents/cache"
 USAGE_CACHE="$CACHE_DIR/usage_snapshot.json"
 CLOUD_CACHE="$CACHE_DIR/cloud_snapshot.json"
-SPEED_CACHE="$CACHE_DIR/speed_snapshot.json"
+SPEED_CACHE=""
 CONFIG_FILE="${FAIZ_STATUSLINE_CONFIG:-$HOME/.agents/statusline_config.json}"
 DASH_BIN="${FAIZ_DASH_BIN:-$HOME/.local/bin/faiz-dash}"
 JQ_BIN="/usr/bin/jq"
 [ -x "$JQ_BIN" ] || JQ_BIN="$(command -v jq || true)"
 
-_file_mtime() {
-    local f="$1"
-    [ -e "$f" ] || { echo 0; return; }
-    stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0
-}
+case "${OSTYPE:-}" in
+    darwin*)
+        _file_mtime() {
+            local f="$1"
+            [ -e "$f" ] || { echo 0; return; }
+            stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0
+        }
+        ;;
+    *)
+        _file_mtime() {
+            local f="$1"
+            [ -e "$f" ] || { echo 0; return; }
+            stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0
+        }
+        ;;
+esac
 
 _sniff_term_width() {
     if [ -n "${FAIZ_TERM_WIDTH:-}" ] && [ "${FAIZ_TERM_WIDTH}" -gt 0 ] 2>/dev/null; then
@@ -86,11 +97,13 @@ fi
 _sniff_term_width
 _detect_truecolor
 
-# Resolve live transcript tail (FAIZ_TRANSCRIPT_PATH -> corrected stdin path -> conversation_id -> latest CLI brain transcript)
+# Resolve live transcript tail (FAIZ_TRANSCRIPT_PATH -> corrected stdin path -> conversation_id/session_id -> guarded fallback)
 t_path="${FAIZ_TRANSCRIPT_PATH:-}"
 if [ -z "$t_path" ] && [ -z "${FAIZ_TRANSCRIPT_PATH+x}" ]; then
+    has_session_ref=0
     if [[ "$stdin_payload" =~ \"transcript_path\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
         t_in="${BASH_REMATCH[1]}"
+        [[ "$t_in" =~ /brain/[^/.][^/]*/ ]] && has_session_ref=1
         if [ -s "$t_in" ]; then
             t_path="$t_in"
         else
@@ -98,17 +111,42 @@ if [ -z "$t_path" ] && [ -z "${FAIZ_TRANSCRIPT_PATH+x}" ]; then
             [ -s "$t_fix" ] && t_path="$t_fix"
         fi
     fi
-    if [ -z "$t_path" ] && [[ "$stdin_payload" =~ \"conversation_id\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
-        t_cid="${BASH_REMATCH[1]}"
+    if [ -z "$t_path" ] && [[ "$stdin_payload" =~ \"(conversation_id|session_id)\"[[:space:]]*:[[:space:]]*\"([^\"]+)\" ]]; then
+        t_cid="${BASH_REMATCH[2]}"
         if [ -n "$t_cid" ]; then
+            has_session_ref=1
             t_cand="$HOME/.gemini/antigravity-cli/brain/$t_cid/.system_generated/logs/transcript.jsonl"
             [ -s "$t_cand" ] && t_path="$t_cand"
         fi
     fi
-    if [ -z "$t_path" ] && [ -d "$HOME/.gemini/antigravity-cli/brain" ]; then
-        t_latest=$(ls -1t "$HOME"/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null | head -n 1 || true)
-        [ -n "$t_latest" ] && [ -s "$t_latest" ] && t_path="$t_latest"
+    if [ -z "$t_path" ] && [ "$has_session_ref" -eq 0 ] && [ -d "$HOME/.gemini/antigravity-cli/brain" ]; then
+        allow_latest_fb=0
+        if [[ "$stdin_payload" =~ \"total_input_tokens\"[[:space:]]*:[[:space:]]*([1-9][0-9]*) ]]; then
+            allow_latest_fb=1
+        elif ! [[ "$stdin_payload" =~ \"total_input_tokens\"[[:space:]]*:[[:space:]]*0(\.0+)?([^0-9]|$) ]] \
+            && [[ "$stdin_payload" =~ \"used_percentage\"[[:space:]]*:[[:space:]]*([1-9][0-9]*(\.[0-9]+)?) ]]; then
+            allow_latest_fb=1
+        fi
+        if [ "$allow_latest_fb" -eq 1 ]; then
+            t_latest=$(ls -1t "$HOME"/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null | head -n 1 || true)
+            [ -n "$t_latest" ] && [ -s "$t_latest" ] && t_path="$t_latest"
+        fi
     fi
+fi
+
+t_key=""
+BURN_CACHE=""
+if [ -n "$t_path" ]; then
+    if [[ "$t_path" =~ /brain/([^/.][^/]*)/ ]]; then
+        t_key="${BASH_REMATCH[1]//[^a-zA-Z0-9._-]/_}"
+    elif [ "${#t_path}" -le 180 ]; then
+        t_key="${t_path//[^a-zA-Z0-9._-]/_}"
+    else
+        read -r _ck1 _ck2 _ <<< "$(printf '%s' "$t_path" | cksum)"
+        t_key="${_ck1}_${_ck2}"
+    fi
+    SPEED_CACHE="$CACHE_DIR/.speed_${t_key}.json"
+    BURN_CACHE="$CACHE_DIR/.session_burn_${t_key}"
 fi
 
 # Single stat pass across cache, transcript & bg stamps
@@ -121,12 +159,19 @@ stat_files=()
 [ -s "$CLOUD_CACHE" ] && stat_files+=("$CLOUD_CACHE")
 [ -n "$t_path" ] && [ -s "$t_path" ] && stat_files+=("$t_path")
 if [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ]; then
-    [ -s "$SPEED_CACHE" ] && stat_files+=("$SPEED_CACHE")
+    [ -n "$SPEED_CACHE" ] && [ -s "$SPEED_CACHE" ] && stat_files+=("$SPEED_CACHE")
     [ -e "$pty_stamp" ] && stat_files+=("$pty_stamp")
     [ -e "$cloud_stamp" ] && stat_files+=("$cloud_stamp")
 fi
 if [ "${#stat_files[@]}" -gt 0 ]; then
-    stat_out=$(stat -c $'%Y\t%s\t%n' "${stat_files[@]}" 2>/dev/null || stat -f $'%m\t%z\t%N' "${stat_files[@]}" 2>/dev/null || true)
+    case "${OSTYPE:-}" in
+        darwin*)
+            stat_out=$(stat -f $'%m\t%z\t%N' "${stat_files[@]}" 2>/dev/null || stat -c $'%Y\t%s\t%n' "${stat_files[@]}" 2>/dev/null || true)
+            ;;
+        *)
+            stat_out=$(stat -c $'%Y\t%s\t%n' "${stat_files[@]}" 2>/dev/null || stat -f $'%m\t%z\t%N' "${stat_files[@]}" 2>/dev/null || true)
+            ;;
+    esac
     while IFS=$'\t' read -r sm sz sn; do
         [ -n "$sn" ] || continue
         [[ "$sm" =~ ^[0-9]+$ ]] || continue
@@ -148,12 +193,12 @@ fi
 
 if [ -n "$t_path" ] && [ -s "$t_path" ] && [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ] && [ "$t_mtime" -gt "$s_mtime" ]; then
     (
-        latest_done=$(tail -n 1 "$t_path" 2>/dev/null | "$JQ_BIN" -c --argjson tmt "$t_mtime" '
+        latest_done=$(tail -n 1 "$t_path" 2>/dev/null | "$JQ_BIN" -c --argjson tmt "$t_mtime" --arg tp "$t_path" '
           select(.type == "PLANNER_RESPONSE" and .status == "DONE" and (.output_tokens // 0) > 0 and (.created_at // "" | length >= 19)) |
           (.created_at[0:19] + "Z" | fromdateiso8601? // null) as $ts |
           select($ts != null) | ($tmt - $ts) as $dt |
           select($dt >= 1 and $dt <= 180) |
-          {step_index: (.step_index // 0), tps: ((.output_tokens / $dt) | round)}
+          {t_path: $tp, step_index: (.step_index // 0), tps: ((.output_tokens / $dt) | round)}
         ' 2>/dev/null || true)
         if [ -n "$latest_done" ]; then
             mkdir -p "$CACHE_DIR" 2>/dev/null || true
@@ -219,7 +264,6 @@ fi
 # Incremental single-session total tokens (input + output) from active transcript.jsonl
 sess_tok="null"
 if [ -n "$t_path" ] && [ -s "$t_path" ] && [ "$t_sz" -gt 0 ] 2>/dev/null; then
-    BURN_CACHE="$CACHE_DIR/.session_burn"
     sb_path=""; sb_off=0; sb_tok=0
     if [ -s "$BURN_CACHE" ]; then
         IFS=$'\t' read -r sb_path sb_off sb_tok < "$BURN_CACHE" 2>/dev/null || true
@@ -254,7 +298,7 @@ if [ -n "$t_path" ] && [ -s "$t_path" ] && [ "$t_sz" -gt 0 ] 2>/dev/null; then
     sess_tok="$sb_tok"
 fi
 
-jq_args=(-rn --argjson in "$stdin_payload" --argjson u_mt "$u_mt" --argjson c_mt "$c_mt" --argjson term_cols "$term_cols" --argjson has_tc "$has_tc" --argjson t_mtime "$t_mtime" --argjson sess_tok "$sess_tok")
+jq_args=(-rn --argjson in "$stdin_payload" --argjson u_mt "$u_mt" --argjson c_mt "$c_mt" --argjson term_cols "$term_cols" --argjson has_tc "$has_tc" --argjson t_mtime "$t_mtime" --argjson sess_tok "$sess_tok" --arg t_path "$t_path")
 if [ -s "$USAGE_CACHE" ]; then
     jq_args+=(--slurpfile u "$USAGE_CACHE")
 else
@@ -265,7 +309,7 @@ if [ -s "$CLOUD_CACHE" ]; then
 else
     jq_args+=(--argjson c '[]')
 fi
-if [ -s "$SPEED_CACHE" ]; then
+if [ -n "$SPEED_CACHE" ] && [ -s "$SPEED_CACHE" ]; then
     jq_args+=(--slurpfile spd "$SPEED_CACHE")
 else
     jq_args+=(--argjson spd '[]')
@@ -394,7 +438,7 @@ else
     end;'
 fi
 
-if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" == *'"max_width"'* ]]; then
+if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[[:space:]]*:[[:space:]]*[1-9] ]]; then
     JQ_MATRIX_PACK='
   def compact_2x4_items($items; $lvl):
     [
@@ -630,7 +674,7 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
 
   (now | floor) as $now_ts |
   # Live transcript metrics: cache hit %, TTL idle age, and latest step speed (tok/s)
-  ($raw_t | map(select(type == "object") | {
+  ($raw_t_txt | split("\n") | map(select(length > 0) | try fromjson catch empty) | map(select(type == "object") | {
     idx: (.step_index // 0),
     type: (.type // ""),
     status: (.status // ""),
@@ -653,13 +697,13 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
         if $nxt.type != "USER_INPUT" and $nxt.ts != null then
           ($nxt.ts - $s.ts) as $dt |
           if $dt >= 1 and $dt <= 300 then (($s.out / $dt) | round) else empty end
-        elif ($spd.step_index // -1) == $s.idx and ($spd.tps // 0) > 0 then
+        elif ($spd.t_path // "") == $t_path and ($spd.step_index // -1) == $s.idx and ($spd.tps // 0) > 0 then
           $spd.tps
         else empty end
       else
         ($t_mtime - $s.ts) as $dt |
         if $dt >= 1 and $dt <= 180 then (($s.out / $dt) | round)
-        elif ($spd.step_index // -1) == $s.idx and ($spd.tps // 0) > 0 then $spd.tps
+        elif ($spd.t_path // "") == $t_path and ($spd.step_index // -1) == $s.idx and ($spd.tps // 0) > 0 then $spd.tps
         else empty end
       end
     ] | last // null
@@ -976,12 +1020,17 @@ JQ_MAIN='
   else . end |
 
   if $m_sess then
-    if $sec_metric == "burn" and (($sess_tok != null and $sess_tok > 0) or ($tok1h != null)) then
+    (
+      if ($sess_tok != null and $sess_tok > 0) then $sess_tok
+      elif $ctx != null then (($in.context_window.total_input_tokens // 0) + ($in.context_window.total_output_tokens // 0))
+      else null end
+    ) as $eff_sess_tok |
+    if $sec_metric == "burn" and ($eff_sess_tok != null or $tok1h != null) then
       (
-        if ($sess_tok != null and $sess_tok > 0) then
-          if $sess_tok >= 1000000 then "\(($sess_tok / 1000000) | (if ($narrow_4x2 and ($eff_cols < 50)) then fmt1 else fmt2 end))M"
-          elif $sess_tok >= 1000 then "\(($sess_tok / 1000) | fmt1)K"
-          else "\($sess_tok)" end
+        if $eff_sess_tok != null then
+          if $eff_sess_tok >= 1000000 then "\(($eff_sess_tok / 1000000) | (if ($narrow_4x2 and ($eff_cols < 50)) then fmt1 else fmt2 end))M"
+          elif $eff_sess_tok >= 1000 then "\(($eff_sess_tok / 1000) | fmt1)K"
+          else "\($eff_sess_tok)" end
         else
           if $tok1h >= 1000000 then "\(($tok1h / 1000000) | fmt1)M/h"
           elif $tok1h >= 1000 then "\(($tok1h / 1000) | round)K/h"
@@ -990,12 +1039,12 @@ JQ_MAIN='
         end
       ) as $burn_txt |
       (
-        if $wide_rich and ($sess_tok != null and $sess_tok > 0) and ($tok1h != null and $tok1h > 0) then
+        if $wide_rich and ($eff_sess_tok != null) and ($tok1h != null and $tok1h > 0) then
           (if $tok1h >= 1000000 then "\(($tok1h / 1000000) | fmt1)M"
            elif $tok1h >= 1000 then "\(($tok1h / 1000) | round)K"
            else "\($tok1h)" end) as $h1_txt |
           [{t: $L.session, r: "lbl"}, {t: $burn_txt, r: "val"}, {t: " · 1h:\($h1_txt)", r: "lbl"}]
-        elif $wide_rich and ($sess_tok != null and $sess_tok > 0) then
+        elif $wide_rich and ($eff_sess_tok != null) then
           [{t: $L.session, r: "lbl"}, {t: $burn_txt, r: "val"}]
         else
           [{t: $L.burn, r: "lbl"}, {t: $burn_txt, r: "val"}]
@@ -1201,10 +1250,10 @@ unset JQ_COMPACT JQ_MAIN JQ_BODY JQ_TAIL
 
 if [ -n "$t_path" ] && [ -s "$t_path" ]; then
     if [ "$t_sz" -le 32768 ] 2>/dev/null; then
-        exec "$JQ_BIN" "${jq_args[@]}" --slurpfile raw_t "$t_path" "$JQ_FILTER"
+        exec "$JQ_BIN" "${jq_args[@]}" --rawfile raw_t_txt "$t_path" "$JQ_FILTER"
     else
-        "$JQ_BIN" "${jq_args[@]}" --slurpfile raw_t <(tail -n 40 "$t_path" 2>/dev/null) "$JQ_FILTER"
+        "$JQ_BIN" "${jq_args[@]}" --rawfile raw_t_txt <(tail -n 120 "$t_path" 2>/dev/null) "$JQ_FILTER"
     fi
 else
-    exec "$JQ_BIN" "${jq_args[@]}" --argjson raw_t '[]' "$JQ_FILTER"
+    exec "$JQ_BIN" "${jq_args[@]}" --arg raw_t_txt "" "$JQ_FILTER"
 fi

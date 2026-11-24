@@ -42,7 +42,6 @@ _pick_python() {
     command -v python3
 }
 
-PYTHON_BIN="$(_pick_python)"
 DASH_BIN="${FAIZ_DASH_BIN:-$0}"
 CACHE_DIR="$HOME/.agents/cache"
 DISABLED_FLAG="$CACHE_DIR/dash_disabled"
@@ -194,5 +193,6 @@ case "${1:-}" in
         ;;
 esac
 
+PYTHON_BIN="$(_pick_python)"
 export PYTHONPATH="$PROJECT_SRC${PYTHONPATH:+:$PYTHONPATH}"
 exec "$PYTHON_BIN" -m faiz_dash "$@"

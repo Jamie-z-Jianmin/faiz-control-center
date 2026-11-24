@@ -14,7 +14,7 @@ English | [简体中文](README.zh-CN.md)
 
 ## Highlights
 
-- **Exact `/usage` Quota Parity (`GEMINI MODELS` + `CLAUDE AND GPT MODELS`)**: Captures live 5-hour & weekly remaining limits via an isolated PTY `/usage` probe (`flock`-guarded, dynamic `Within each group` + `rfind()` frame settle for fast PTY convergence without repaint tearing) with **activity-aware 45s refresh** when active turns burn quota (180s when idle). Renders dedicated `Gemini` and `Claude` capsules & TUI rows when standalone Argon is absent while staying backward-compatible with legacy 3-bucket snapshots and `capsule_colors.argon` overrides.
+- **Exact `/usage` Quota Parity (`GEMINI MODELS` + `CLAUDE AND GPT MODELS`)**: Captures live 5-hour & weekly remaining limits via an isolated PTY `/usage` probe (`flock`-guarded, dynamic `Within each group` + `rfind()` frame settle for fast PTY convergence without repaint tearing) with **activity-aware 20s refresh** when active turns burn quota (180s when idle). Renders dedicated `Gemini` and `Claude` capsules & TUI rows when standalone Argon is absent while staying backward-compatible with legacy 3-bucket snapshots and `capsule_colors.argon` overrides.
 - **Sub-80ms Pure Bash + `jq` StatusLine**: Never blocks prompt rendering. Features a unified **deep slate-blue** palette with a 4-tier responsive matrix: full-label **wide `2×4` glass spread** (`>=155` cols), compact 4-line **`2×4` glass** (`88–154` cols, with cold-tag compaction rescue), tight **5-line `4×2` slate-blue `[ ... ]` outline** (`46–86` cols), plus `Apple_Terminal` 16-color fallback and zero-noise cloud hiding.
 - **Prompt Cache Hit & Live Token Speed (`t/s`)**: Reads only the trailing tail of the active session `transcript.jsonl` to surface Cache Hit %, 3m/4m TTL cooldown alerts, and real-time output generation speed (`t/s`).
 - **Zero-Clutter On-Demand Inspection**:
@@ -40,7 +40,7 @@ flowchart LR
     Agy["agy CLI Session"] -->|"statusLine JSON stdin"| SL["scripts/statusline.sh (<80ms)"]
     Transcript["transcript.jsonl (tail)"] -->|"Cache Hit %, TTL, t/s"| SL
     SL -->|"Read <1ms"| Cache["~/.agents/cache/*.json"]
-    SL -.->|"Active 45s / Idle 180s (--quota-only)"| Daemon["faiz-dash --once-json"]
+    SL -.->|"Active 20s / Idle 180s (--quota-only)"| Daemon["faiz-dash --once-json"]
     Daemon -->|"PTY Within-each-group + rfind() + flock"| Usage["UsageProbe (/usage)"]
     Daemon -->|"Control Plane (colab --auth=adc)"| Colab["ColabCliGateway"]
     Daemon -->|"Data Plane (gdrive / rclone)"| Cloud["CloudProbe + MailboxProbe"]
@@ -112,7 +112,7 @@ faiz-dash config          # Open interactive settings TUI with live preview
 | `faiz-dash inspect [--live] [--json]` | Print sanitized Markdown (or JSON) snapshot of quotas, burn, cloud/backoff, mailbox, and telemetry |
 | `faiz-dash side` | Toggle on-demand right-split Textual sidebar inside Rex (`--focus=false`), or print native Terminal hint |
 | `faiz-dash dock` | Toggle on-demand bottom 3-column Dock inside Rex |
-| `faiz-dash config` | Launch interactive settings TUI (also accepts CLI flags: `--style`, `--theme`, `--lang`, `--quota-precision`, `--row-colors`, `--capsule-color <id>=<color>`, `--side-ratio`, `--auto-dock on\|off`, `--show`, `--reset`) |
+| `faiz-dash config` | Launch interactive settings TUI (also accepts CLI flags: `--style`, `--indicator`, `--density`, `--secondary`, `--theme`, `--lang`, `--quota-precision`, `--row-colors`, `--capsule-color <id>=<color>`, `--side-ratio`, `--auto-dock on\|off`, `--show`, `--reset`) |
 | `faiz-dash off` / `on` / `status` | Disable/enable startup auto-dock (`~/.agents/cache/dash_disabled`) and inspect cache ages |
 | `faiz-dash --once-json [--quota-only] [--no-pty]` | Run one-shot probe collection and emit combined JSON |
 | `faiz-dash --preset 1 \| 2` | Open full-terminal TUI directly in horizontal Dock (`1`) or vertical Sidebar (`2`) |

@@ -14,7 +14,7 @@
 
 ## 核心特性
 
-- **`/usage` 双组实时配额对齐（`GEMINI MODELS` + `CLAUDE AND GPT MODELS`）**：通过隔离 PTY 探针采集 5 小时与每周剩余配额（带 `flock` 并发锁，以及基于 `Within each group` 与 `rfind()` 的动态尾帧收敛，兼顾极速返回与防重绘撕裂）；当检测到活跃对话消耗配额时自动切换为 **45 秒高频后台刷新**（空闲保持 180 秒零消耗）。当无独立 Argon 分组时自动以 `Claude` 胶囊与 TUI 面板行替代呈现，同时向后兼容旧版三分组快照与 `capsule_colors.argon` 配色覆盖。
+- **`/usage` 双组实时配额对齐（`GEMINI MODELS` + `CLAUDE AND GPT MODELS`）**：通过隔离 PTY 探针采集 5 小时与每周剩余配额（带 `flock` 并发锁，以及基于 `Within each group` 与 `rfind()` 的动态尾帧收敛，兼顾极速返回与防重绘撕裂）；当检测到活跃对话消耗配额时自动切换为 **20 秒高频后台刷新**（空闲保持 180 秒零消耗）。当无独立 Argon 分组时自动以 `Claude` 胶囊与 TUI 面板行替代呈现，同时向后兼容旧版三分组快照与 `capsule_colors.argon` 配色覆盖。
 - **`<80ms` 纯 Bash + `jq` 热路径渲染**：永不阻塞输入提示符。采用统一**深石板蓝**默认视觉与四级自适应矩阵：宽屏（`>=155` 列）自动扩展为完整标签 **`2×4` 铺满矩阵**，中屏分屏（`88–154` 列）保持 **4 行紧凑 `2×4` 玻璃胶囊**（内建 `cold` 标签兜底防塌缩），窄屏分屏（`46–86` 列）自动收紧为 **5 行 `4×2` 石板蓝线框 `[ ... ]` 胶囊**，并支持 `Apple_Terminal` 16 色降级与无云端配置零噪音隐藏。
 - **Prompt Cache 命中率与实时输出速率 (`t/s`)**：仅增量读取当前会话 `transcript.jsonl` 尾行，实时呈现缓存命中率、3m/4m TTL 冷却预警与真实输出速度 (`t/s`)。
 - **零常驻挤压的双通道检视**：
@@ -40,7 +40,7 @@ flowchart LR
     Agy["agy CLI 会话"] -->|"statusLine JSON stdin"| SL["scripts/statusline.sh (<80ms)"]
     Transcript["transcript.jsonl 尾行"] -->|"Cache 命中, TTL, t/s"| SL
     SL -->|"毫秒级只读"| Cache["~/.agents/cache/*.json"]
-    SL -.->|"活跃 45s / 空闲 180s (--quota-only)"| Daemon["faiz-dash --once-json"]
+    SL -.->|"活跃 20s / 空闲 180s (--quota-only)"| Daemon["faiz-dash --once-json"]
     Daemon -->|"PTY Within-each-group + rfind() + flock"| Usage["UsageProbe (/usage)"]
     Daemon -->|"控制平面 (colab --auth=adc)"| Colab["ColabCliGateway"]
     Daemon -->|"数据平面 (gdrive / rclone)"| Cloud["CloudProbe + MailboxProbe"]
@@ -112,7 +112,7 @@ faiz-dash config          # 打开双语实时预览设置中心
 | `faiz-dash inspect [--live] [--json]` | 非交互式输出配额、24h Burn、云端退避、Mailbox 与 APM 遥测报告 |
 | `faiz-dash side` | 在 Rex 中按需打开/关闭右侧边栏（保持主对话焦点；非 Rex 终端会提示替代方案） |
 | `faiz-dash dock` | 在 Rex 中按需打开/关闭底部三栏 Dock |
-| `faiz-dash config` | 启动设置 UI（也支持 CLI 参数：`--style`、`--theme`、`--lang zh\|en`、`--quota-precision exact\|1dp\|int`、`--row-colors`、`--capsule-color <id>=<color>`、`--side-ratio`、`--auto-dock on\|off`、`--show`、`--reset`） |
+| `faiz-dash config` | 启动设置 UI（也支持 CLI 参数：`--style`、`--indicator`、`--density`、`--secondary`、`--theme`、`--lang zh\|en`、`--quota-precision exact\|1dp\|int`、`--row-colors`、`--capsule-color <id>=<color>`、`--side-ratio`、`--auto-dock on\|off`、`--show`、`--reset`） |
 | `faiz-dash off` / `on` / `status` | 关闭/开启新会话自动弹出底部 Dock（`~/.agents/cache/dash_disabled`）及查看缓存状态 |
 | `faiz-dash --once-json [--quota-only] [--no-pty]` | 单次采集快照并输出脱敏 JSON |
 | `faiz-dash --preset 1 \| 2` | 在当前终端直接以横排 Dock (`1`) 或竖排侧栏 (`2`) 启动全屏 TUI |

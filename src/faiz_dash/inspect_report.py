@@ -281,7 +281,7 @@ def _render_quota_section(quota: Optional[dict[str, Any]], usage_age: Optional[i
     t1h = _format_tokens(int(burn.get("tokens_1h") or 0))
     t24h = _format_tokens(int(burn.get("tokens_24h") or 0))
     hit = float(burn.get("cache_hit_rate") or 0.0) * 100.0
-    lines.append(f"- Burn: `1h {t1h}` | `24h {t24h}` | Prompt Cache Hit `{hit:.1f}%`")
+    lines.append(f"- Global Burn (top 10): `1h {t1h}` | `24h {t24h}` | Prompt Cache Hit `{hit:.1f}%`")
     by_model = burn.get("by_model_24h") or {}
     if isinstance(by_model, dict) and by_model:
         ranked = sorted(by_model.items(), key=lambda kv: int(kv[1]), reverse=True)[:4]
