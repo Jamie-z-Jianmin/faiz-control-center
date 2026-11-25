@@ -39,12 +39,12 @@ _sniff_term_width() {
         term_cols="$FAIZ_TERM_WIDTH"
         return
     fi
-    if [ -n "${COLUMNS:-}" ] && [ "${COLUMNS}" -gt 0 ] 2>/dev/null; then
-        term_cols="$COLUMNS"
-        return
-    fi
     if [[ "$stdin_payload" =~ \"terminal_width\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -gt 0 ] 2>/dev/null; then
         term_cols="${BASH_REMATCH[1]}"
+        return
+    fi
+    if [ -n "${COLUMNS:-}" ] && [ "${COLUMNS}" -gt 0 ] 2>/dev/null; then
+        term_cols="$COLUMNS"
         return
     fi
     local rex_blk="${REX_BLOCK_ID:-${REX_BLOCK:-}}"
@@ -215,12 +215,23 @@ if [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ] && [ -x "$DASH_BIN" ]; then
     c_last=$([ "$c_st_mt" -gt 0 ] && echo $((now_ts - c_st_mt)) || echo 999999)
     need_pty=0
     need_cloud=0
-    pty_cooldown=180
-    if [ "$t_mtime" -gt 0 ] && [ $((now_ts - t_mtime)) -lt 120 ]; then
-        pty_cooldown=20
+    has_stdin_quota=0
+    if [[ "$stdin_payload" == *'"quota"'* ]] && [[ "$stdin_payload" =~ \"quota\"[[:space:]]*:[[:space:]]*\{ ]] && [[ "$stdin_payload" =~ \"remaining_fraction\"[[:space:]]*: ]]; then
+        has_stdin_quota=1
     fi
-    if [ "$u_mt" -eq 0 ] || [ "$p_last" -gt "$pty_cooldown" ]; then
-        need_pty=1
+    if [ "$has_stdin_quota" -eq 1 ]; then
+        pty_cooldown=600
+        if [ "$p_last" -gt "$pty_cooldown" ]; then
+            need_pty=1
+        fi
+    else
+        pty_cooldown=180
+        if [ "$t_mtime" -gt 0 ] && [ $((now_ts - t_mtime)) -lt 120 ]; then
+            pty_cooldown=20
+        fi
+        if [ "$u_mt" -eq 0 ] || [ "$p_last" -gt "$pty_cooldown" ]; then
+            need_pty=1
+        fi
     fi
     [ "$c_age" -gt 90 ] && [ "$c_last" -gt 90 ] && need_cloud=1
     if [ "$need_cloud" -eq 1 ] \
@@ -535,6 +546,53 @@ else
     end;'
 fi
 
+if [[ "$stdin_payload" == *'"quota"'* ]]; then
+    JQ_STDIN_QUOTA='
+  def q_pct($o):
+    if ($o | type) == "object" and ($o.remaining_fraction | type) == "number" then
+      (($o.remaining_fraction * 100) | if . < 0 then 0 elif . > 100 then 100 else . end)
+    else null end;
+  def q_reset_ep($o; $now):
+    if ($o | type) != "object" then null
+    elif ($o.reset_in_seconds | type) == "number" then
+      (if $o.reset_in_seconds <= 0 then 0 else ($now + ($o.reset_in_seconds | floor)) end)
+    elif ($o.reset_time | type) == "string" and ($o.reset_time | length) >= 19 then
+      (($o.reset_time[0:19] + "Z") | fromdateiso8601? // null)
+    else null end;'
+    JQ_STDIN_QUOTA_VARS='
+  ($in.quota // null) as $in_q |
+  (($in_q | type) == "object" and (($in_q["gemini-5h"] | type) == "object" or ($in_q["gemini-weekly"] | type) == "object" or ($in_q["3p-5h"] | type) == "object" or ($in_q["3p-weekly"] | type) == "object")) as $has_in_q |
+  q_pct($in_q["gemini-5h"]) as $in_pro5 |
+  q_pct($in_q["gemini-weekly"]) as $in_prowk |
+  q_pct($in_q["3p-5h"]) as $in_cla5 |
+  q_pct($in_q["3p-weekly"]) as $in_cla |
+  q_reset_ep($in_q["gemini-5h"]; $now_ts) as $in_reset_ep |'
+else
+    JQ_STDIN_QUOTA=''
+    JQ_STDIN_QUOTA_VARS='
+  false as $has_in_q |
+  null as $in_pro5 |
+  null as $in_prowk |
+  null as $in_cla5 |
+  null as $in_cla |
+  null as $in_reset_ep |'
+fi
+
+if [[ "$stdin_payload" == *'"current_usage"'* ]]; then
+    JQ_CACHE_HIT='
+  ($in.context_window.current_usage // null) as $cur_u |
+  (
+    if $last_tok != null then (($last_tok.cr / ($last_tok.inp + $last_tok.cr)) * 100)
+    elif ($cur_u | type) == "object" then
+      (($cur_u.input_tokens // 0) + ($cur_u.cache_read_input_tokens // 0) + ($cur_u.cache_creation_input_tokens // 0)) as $cu_den |
+      if $cu_den > 0 then ((($cur_u.cache_read_input_tokens // 0) / $cu_den) * 100) else null end
+    else null end
+  ) as $cache_hit |'
+else
+    JQ_CACHE_HIT='
+  (if $last_tok != null then (($last_tok.cr / ($last_tok.inp + $last_tok.cr)) * 100) else null end) as $cache_hit |'
+fi
+
 JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   def rst: "\u001b[0m";
   def fmt1:
@@ -552,6 +610,7 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
     if $prec == "int" or $tight then "\($v | round)"
     elif $prec == "1dp" then ($v | fmt1)
     else ($v | fmt2) end;
+'"${JQ_STDIN_QUOTA}"'
   def bar6($pct):
     (($pct / 16.6667) | round) as $r |
     (if $r < 0 then 0 elif $r > 6 then 6 else $r end) as $f |
@@ -696,7 +755,7 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
     out: (.output_tokens // 0)
   })) as $tsteps |
   ([ $tsteps[] | select(.type == "PLANNER_RESPONSE" and (.inp + .cr) > 0) ] | last) as $last_tok |
-  (if $last_tok != null then (($last_tok.cr / ($last_tok.inp + $last_tok.cr)) * 100) else null end) as $cache_hit |
+'"${JQ_CACHE_HIT}"'
   (if $last_tok != null and $last_tok.ts != null then ($now_ts - $last_tok.ts) else null end) as $cache_age |
 
   (
@@ -722,10 +781,20 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   ) as $live_tps |
 
   ($in.context_window.used_percentage // null) as $ctx |
-  ($u.pro_5h_pct // null) as $pro5 |
-  ($u.pro_wk_pct // null) as $prowk |
-  ($u.claude_5h_pct // null) as $cla5 |
-  ($u.claude_wk_pct // null) as $cla |
+'"${JQ_STDIN_QUOTA_VARS}"'
+  ($u.pro_5h_reset_at_epoch // null) as $u_rst5 |
+  ($u.pro_wk_reset_at_epoch // null) as $u_rstwk |
+  ($u_rst5 != null and $u_rst5 > 0 and $now_ts >= ($u_rst5 + 60)) as $u_5h_exp |
+  ($u_rstwk != null and $u_rstwk > 0 and $now_ts >= ($u_rstwk + 60)) as $u_wk_exp |
+  (if $u_5h_exp and ($u.pro_5h_pct != null) then 100.0 else ($u.pro_5h_pct // null) end) as $u_pro5 |
+  (if $u_wk_exp and ($u.pro_wk_pct != null) then 100.0 else ($u.pro_wk_pct // null) end) as $u_prowk |
+  (if $u_5h_exp then 0 else $u_rst5 end) as $u_rst5_eff |
+  (if $in_prowk != null then $in_prowk else $u_prowk end) as $prowk |
+  (if $in_pro5 != null then $in_pro5 else $u_pro5 end) as $pro5_raw |
+  (if ($prowk != null and $prowk <= 0) then 0.0 else $pro5_raw end) as $pro5 |
+  (if $in_cla != null then $in_cla else ($u.claude_wk_pct // null) end) as $cla |
+  (if $in_cla5 != null then $in_cla5 else ($u.claude_5h_pct // null) end) as $cla5_raw |
+  (if ($cla != null and $cla <= 0) then 0.0 else $cla5_raw end) as $cla5 |
   ($u.argon_wk_pct // null) as $arg |
   (($cla5 != null and $cla5 < 99.9) or ($cla != null and $cla < 99.9)) as $cla_show |
   ($use_adaptive_2row and ($eff_cols < 100)) as $cla_tight |
@@ -745,11 +814,18 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   (if $cla5 != null and $cla != null then (if $cla5 < $cla then $cla5 else $cla end)
    elif $cla5 != null then $cla5
    else $cla end) as $cla_min |
-  ($u.quota_gate // "") as $gate |
+  (
+    if $has_in_q or $u_5h_exp or $u_wk_exp then
+      if ($pro5 != null and $pro5 < 20) or ($prowk != null and $prowk < 20) then "WARN_PRO"
+      elif ($arg != null and $arg < 20) then "THROTTLE_ARGON"
+      else "GREEN" end
+    elif ($pro5 != null and $pro5 < 20) or ($prowk != null and $prowk < 20) then "WARN_PRO"
+    else ($u.quota_gate // "") end
+  ) as $gate |
   ($u.pro_count // null) as $pc |
   ($u.gcp_count // null) as $gc |
   ($u.tokens_1h // null) as $tok1h |
-  ($u.pro_5h_reset_at_epoch // null) as $reset_ep |
+  (if $in_reset_ep != null then $in_reset_ep else $u_rst5_eff end) as $reset_ep |
   ($c.colab_state // "") as $clb |
   ($c.cloud_ok // ($clb != "DEGRADED" and $clb != "")) as $cloud_ok |
   ($c.cloud_error_kind // (if (($c.error // "") | test("RATE_LIMIT|rateLimit"; "i")) then "rate_limit" elif (($c.error // "") | test("TIMED OUT|TIMEOUT"; "i")) then "timeout" else "" end)) as $err_kind |
@@ -761,7 +837,7 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   ($c.mailbox.stale // false) as $m_stale |
   ($c.mailbox_done_count // 0) as $md |
   ($u.pty_fetched_epoch // (if $u_mt > 0 then $u_mt else 0 end)) as $pty_ep |
-  (if $pty_ep > 0 then ($now_ts - $pty_ep) else 999999 end) as $pty_age |
+  (if $has_in_q then 0 elif $pty_ep > 0 then ($now_ts - $pty_ep) else 999999 end) as $pty_age |
   (if $c_mt > 0 then ($now_ts - $c_mt) else 999999 end) as $c_age |
   (if ($clb == "NOT_CONFIGURED" or $clb == "") then $pty_age else ([ $pty_age, $c_age ] | max) end) as $max_age |
 

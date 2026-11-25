@@ -307,8 +307,55 @@ class TestTuiPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("Claude", new_txt)
                 self.assertIn("88.2%", new_txt)
                 self.assertIn("5h 70.5%", new_txt)
+                self.assertIn("Pace:", new_txt)
+                self.assertIn("5h -21%", new_txt)
+                self.assertIn("Wk +8% (~1d1h)", new_txt)
                 self.assertNotIn("Argon", new_txt)
                 self.assertNotIn("C/G", new_txt)
+
+    async def test_statusline_config_app_preview_scenario_and_width_cycling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "statusline_config.json"
+            disabled_flag = Path(tmp) / "dash_disabled"
+            app = StatuslineConfigApp(config_path=cfg_path, disabled_flag_path=disabled_flag)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause()
+                # Initial live@91c
+                self.assertIn("91c · Live", str(app.query_one("#preview-box").render()))
+
+                # Cycle width: auto -> 58 (triggers 4x2 outline '[')
+                await pilot.press("w")
+                await pilot.pause()
+                self.assertEqual(app.preview_width, 58)
+                p58 = str(app.query_one("#preview-box").render())
+                self.assertIn("58c · Live", p58)
+                self.assertIn("[", p58)
+
+                # Cycle scenario: live -> normal -> limits (shows cold + WARN_PRO) -> new_session (shows Cache --)
+                await pilot.press("p")
+                await pilot.pause()
+                self.assertEqual(app.preview_scenario, "normal")
+
+                await pilot.press("w")  # width -> 91
+                await pilot.press("p")  # scenario -> limits
+                await pilot.pause()
+                self.assertEqual(app.preview_scenario, "limits")
+                p_lim = str(app.query_one("#preview-box").render())
+                self.assertIn("91c · Limits", p_lim)
+                self.assertIn("cold", p_lim)
+
+                await pilot.press("p")  # scenario -> new_session
+                await pilot.pause()
+                p_new = str(app.query_one("#preview-box").render())
+                self.assertIn("91c · New", p_new)
+                self.assertIn("Cache --", p_new)
+
+                # Saving config must NOT persist view-only preview_scenario / preview_width
+                await pilot.press("s")
+                await pilot.pause()
+                saved = load_statusline_config(cfg_path)
+                self.assertNotIn("preview_scenario", saved)
+                self.assertNotIn("preview_width", saved)
 
 
 if __name__ == "__main__":

@@ -14,13 +14,14 @@ English | [简体中文](README.zh-CN.md)
 
 ## Highlights
 
-- **Exact `/usage` Quota Parity (`GEMINI MODELS` + `CLAUDE AND GPT MODELS`)**: Captures live 5-hour & weekly remaining limits via an isolated PTY `/usage` probe (`flock`-guarded, dynamic `Within each group` + `rfind()` frame settle for fast PTY convergence without repaint tearing) with **activity-aware 20s refresh** when active turns burn quota (180s when idle). Renders dedicated `Gemini` and `Claude` capsules & TUI rows when standalone Argon is absent while staying backward-compatible with legacy 3-bucket snapshots and `capsule_colors.argon` overrides.
+- **Zero-Latency Native `stdin` Quota Fast-Path + PTY `/usage` Fallback (`GEMINI MODELS` + `CLAUDE AND GPT MODELS`)**: Directly consumes native `agy` `stdin.quota` (`gemini-5h`, `gemini-weekly`, `3p-5h`, `3p-weekly`, `reset_in_seconds`) with zero PTY overhead when present (extending PTY background cooldown to `600s` for global burn/account metadata), and seamlessly falls back to the `flock`-guarded isolated PTY `/usage` probe (`20s` active / `180s` idle) when absent. Includes `stdin.terminal_width` priority over stale `$COLUMNS`, `reset_at_epoch + 60s` expiry auto-reset, and `weekly == 0` coupling so exhausted pools never misreport `100%` 5h capacity.
 - **Sub-80ms Pure Bash + `jq` StatusLine**: Never blocks prompt rendering. Features a unified **deep slate-blue** palette with a responsive matrix: Col-4 stacked `Gemini + Claude` **`2×4` full-width water-fill** across wide/ultrawide (`>=155` cols, uncapped) and split panes (`86–154` cols, preserving exact 2-decimal precision, `Speed` label, and symmetrical `Cache --` / `Speed --` new-session placeholders), tight **5-line `4×2` slate-blue `[ ... ]` outline** (`46–85` cols), plus `Apple_Terminal` 16-color fallback and zero-noise cloud hiding.
-- **Prompt Cache Hit & Live Token Speed (`t/s`)**: Reads only the trailing tail of the active session `transcript.jsonl` to surface Cache Hit %, 3m/4m TTL cooldown alerts, and real-time output generation speed (`t/s`).
-- **Zero-Clutter On-Demand Inspection**:
-  - **In-chat Diagnostic Bubble (`/faiz-dash` / `faiz-dash inspect`)**: Outputs a clean Markdown summary of all quota buckets, reset countdowns, 24h per-model token burn, cloud/drive backoff & `colab_source` / `colab_gpu` / `drive_backend` telemetry, mailbox items, and read-only APM telemetry without occupying terminal width.
-  - **On-Demand Rex Sidebar (`faiz-dash side`)**: Toggles a 28% vertical Textual sidebar in Rex (`--focus=false`) on demand (`q` or `faiz-dash side` to dismiss). Defaults to no permanent dock (`faiz-dash off`).
-- **Bilingual Settings Studio (`faiz-dash config`)**: Interactive `en`/`zh` Textual config editor with 5 visual styles (`capsule`, `powerline`, `pill`, `ghost`, `minimal`), 5 themes (`google`, `nord`, `tokyo_night`, `catppuccin`, `custom`), **per-capsule color overrides (`capsule_colors`)** (`blue`, `green`, `yellow`, `red`, `slate`, `muted`, `auto`, with `argon` falling back cleanly to `claude`), row uniform palettes, `ring`/`bar` indicators, quota precision (`exact` / `1dp` / `int`), Rex split ratios, and live preview.
+- **Prompt Cache Hit & Live Token Speed (`t/s`)**: Reads only the trailing tail of the active session `transcript.jsonl` (with `stdin.context_window.current_usage` fallback before transcript flush) to surface Cache Hit %, 3m/4m TTL cooldown alerts, and real-time output generation speed (`t/s`).
+- **Zero-Clutter On-Demand Inspection & Quota Pace Forecast**:
+  - **In-chat Diagnostic Bubble (`/faiz-dash` / `faiz-dash inspect`)**: Outputs a clean Markdown summary of all quota buckets, reset countdowns, **burn Pace & Run-Out Forecast** (`Pace / Forecast` vs elapsed 5h/weekly window timeline), 24h per-model token burn, cloud/drive backoff & `colab_source` / `colab_gpu` / `drive_backend` telemetry, mailbox items, and read-only APM telemetry without occupying terminal width.
+  - **Environment Health Check (`faiz-dash doctor`)**: Verifies Python runtime/packages, `bash`/`jq`, terminal TrueColor, Nerd Font capsule glyphs (` ● `), `statusline.sh` permissions, `agy settings.json` wiring, and snapshot cache ages (supports `--markdown` privacy-masked output & `--json`).
+  - **On-Demand Rex Sidebar (`faiz-dash side`)**: Toggles a 28% vertical Textual sidebar in Rex (`--focus=false`) on demand (`q` or `faiz-dash side` to dismiss), with compact `Pace:` indicators inside `QuotaPanel`. Defaults to no permanent dock (`faiz-dash off`).
+- **Bilingual Settings Studio (`faiz-dash config`)**: Interactive `en`/`zh` Textual config editor with 5 visual styles (`capsule`, `powerline`, `pill`, `ghost`, `minimal`), 5 themes (`google`, `nord`, `tokyo_night`, `catppuccin`, `custom`), **per-capsule color overrides (`capsule_colors`)** (`blue`, `green`, `yellow`, `red`, `slate`, `muted`, `auto`, with `argon` falling back cleanly to `claude`), row uniform palettes, `ring`/`bar` indicators, quota precision (`exact` 2dp / `1dp` / `int`), Rex split ratios, and live preview with **isolated scenario (`p`: Live / Normal / Limits / New) & width (`w`: Auto / 58c / 91c / 168c) cycling**.
 - **Dual-Plane Cloud & Worker Swarm Extension**: Decouples the `google-colab-cli` (`colab --auth=adc`) Control Plane (active sessions, GPU hardware, compute-unit balance) from the Drive Data Plane, backed by an auto-selected `gdrive` CLI + `rclone` Drive gateway (`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`), GCE Spot instance monitoring, persistent exponential rate-limit backoff, and async mailbox job verification.
 
 ---
@@ -67,6 +68,8 @@ flowchart LR
 
 ```bash
 curl -fsSL https://faiz-control-center.pages.dev/install.sh | bash
+# Optional: automatically wire statusLine into ~/.gemini/antigravity-cli/settings.json
+curl -fsSL https://faiz-control-center.pages.dev/install.sh | FAIZ_WIRE_SETTINGS=1 bash
 ```
 
 *(Cloudflare Pages edge-accelerated mirror; GitHub raw fallback: `https://raw.githubusercontent.com/Jamie-z-Jianmin/faiz-control-center/main/docs/site/install.sh`)*
@@ -80,11 +83,11 @@ cd faiz-control-center
 # 1. Install Python package & Textual UI (use a virtualenv or pipx)
 python3 -m pip install -e .
 
-# 2. Link statusline, CLI wrapper, Rex hook, and /faiz-dash skill into ~/.agents & ~/.local/bin
-./install.sh --link   # use --copy for standalone copy without symlinks
+# 2. Link statusline, CLI wrapper, Rex hook, and /faiz-dash skill (add --wire-settings to auto-configure settings.json)
+./install.sh --link --wire-settings   # use --copy for standalone copy without symlinks
 ```
 
-Ensure `~/.local/bin` is in your `PATH`, then add `statusLine` to `~/.gemini/antigravity-cli/settings.json`:
+Ensure `~/.local/bin` is in your `PATH`. `--wire-settings` safely backs up and merges `~/.gemini/antigravity-cli/settings.json` (preserving `stack_with_default`/`padding`, refusing corrupted JSON); or configure manually:
 
 ```json
 {
@@ -98,9 +101,10 @@ Ensure `~/.local/bin` is in your `PATH`, then add `statusLine` to `~/.gemini/ant
 ### Verify
 
 ```bash
-faiz-dash inspect         # Non-interactive Markdown report from cache
+faiz-dash doctor          # Check Python, bash/jq, TrueColor, Nerd Fonts, settings.json & caches
+faiz-dash inspect         # Non-interactive Markdown report (with Pace / Forecast) from cache
 faiz-dash inspect --live  # Run fresh probes and print Markdown report
-faiz-dash config          # Open interactive settings TUI with live preview
+faiz-dash config          # Open interactive settings TUI with scenario (p) & width (w) live preview
 ```
 
 ---
@@ -109,10 +113,11 @@ faiz-dash config          # Open interactive settings TUI with live preview
 
 | Command | Description |
 | :--- | :--- |
-| `faiz-dash inspect [--live] [--json]` | Print sanitized Markdown (or JSON) snapshot of quotas, burn, cloud/backoff, mailbox, and telemetry |
+| `faiz-dash inspect [--live] [--json]` | Print sanitized Markdown (or JSON) snapshot of quotas, **Pace / Forecast**, burn, cloud/backoff, mailbox, and telemetry |
+| `faiz-dash doctor [--markdown] [--json]` | Run 9-point environment & installation health check (TrueColor, Nerd Font glyphs, `settings.json`, caches) |
 | `faiz-dash side` | Toggle on-demand right-split Textual sidebar inside Rex (`--focus=false`), or print native Terminal hint |
 | `faiz-dash dock` | Toggle on-demand bottom 3-column Dock inside Rex |
-| `faiz-dash config` | Launch interactive settings TUI (also accepts CLI flags: `--style`, `--indicator`, `--density`, `--secondary`, `--theme`, `--lang`, `--quota-precision`, `--row-colors`, `--capsule-color <id>=<color>`, `--side-ratio`, `--auto-dock on\|off`, `--show`, `--reset`) |
+| `faiz-dash config` | Launch interactive settings TUI (`p` cycle preview scenario, `w` cycle preview width; also supports CLI flags: `--style`, `--indicator`, `--density`, `--secondary`, `--theme`, `--lang`, `--quota-precision`, `--row-colors`, `--capsule-color <id>=<color>`, `--side-ratio`, `--auto-dock on\|off`, `--show`, `--reset`) |
 | `faiz-dash off` / `on` / `status` | Disable/enable startup auto-dock (`~/.agents/cache/dash_disabled`) and inspect cache ages |
 | `faiz-dash --once-json [--quota-only] [--no-pty]` | Run one-shot probe collection and emit combined JSON |
 | `faiz-dash --preset 1 \| 2` | Open full-terminal TUI directly in horizontal Dock (`1`) or vertical Sidebar (`2`) |
@@ -174,7 +179,7 @@ If your workflow runs remote workers on Google Colab + Drive (`gdrive` CLI / `rc
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-GitHub Actions CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) verifies shell syntax, `styles.tcss` wheel packaging, and all 51 unit/integration/Textual Pilot tests across Ubuntu & macOS.
+GitHub Actions CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) verifies shell syntax, `styles.tcss` wheel packaging, and all 57 unit/integration/Textual Pilot tests across Ubuntu & macOS.
 
 ## License
 

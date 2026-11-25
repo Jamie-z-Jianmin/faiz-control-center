@@ -9,9 +9,11 @@ from pathlib import Path
 import sys
 from typing import Optional
 
+from . import __version__
 from .collectors.cloud_probe import CloudProbe
 from .collectors.mailbox_probe import MailboxProbe
 from .collectors.usage_probe import UsageProbe
+from .doctor import format_doctor_output, run_doctor_checks
 from .gateways.colab import ColabCliGateway
 from .gateways.drive import create_drive_gateway
 from .inspect_report import collect_inspect_payload, format_inspect_output
@@ -221,7 +223,7 @@ def _run_config_cmd(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="faiz-dash", description="Faiz Control Center v0.1")
+    parser = argparse.ArgumentParser(prog="faiz-dash", description=f"Faiz Control Center v{__version__}")
     parser.add_argument("--dock", action="store_true", help="Launch in compact Rex Dock mode")
     parser.add_argument(
         "--preset",
@@ -278,6 +280,10 @@ def build_parser() -> argparse.ArgumentParser:
     insp_p.add_argument("--live", action="store_true", help="Run live quota/cloud/mailbox probes before formatting")
     insp_p.add_argument("--json", action="store_true", help="Print raw sanitized JSON payload instead of Markdown")
     insp_p.add_argument("--no-pty", action="store_true", help="With --live, skip PTY /usage probe")
+
+    doc_p = sub.add_parser("doctor", help="Verify runtime dependencies, TrueColor, Nerd Fonts, settings.json, and caches")
+    doc_p.add_argument("--markdown", action="store_true", help="Format doctor output as privacy-masked Markdown")
+    doc_p.add_argument("--json", action="store_true", help="Print sanitized JSON output")
     return parser
 
 
@@ -293,12 +299,20 @@ def _run_inspect_cmd(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_doctor_cmd(args: argparse.Namespace) -> int:
+    report = run_doctor_checks()
+    print(format_doctor_output(report, as_json=args.json, as_markdown=args.markdown))
+    return 0 if report["ok"] else 1
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if args.subcmd == "config":
         return _run_config_cmd(args)
     if args.subcmd == "inspect":
         return _run_inspect_cmd(args)
+    if args.subcmd == "doctor":
+        return _run_doctor_cmd(args)
 
     if args.once_json:
         payload = asyncio.run(_run_once_json(skip_pty=args.no_pty, quota_only=args.quota_only))

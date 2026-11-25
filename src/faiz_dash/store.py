@@ -26,6 +26,9 @@ from .models import (
 
 DEFAULT_CACHE_DIR = Path.home() / ".agents" / "cache"
 MAX_CACHE_BYTES = 240_000
+WINDOW_5H_SECONDS = 5 * 3600
+WINDOW_WEEKLY_SECONDS = 7 * 86400
+MIN_FORECAST_ELAPSED_SEC = 600
 
 
 def summarize_probe_error(err_text: Optional[str], cooldown_sec: int = 0) -> str:
@@ -138,6 +141,62 @@ def parse_refresh_seconds(refresh_text: str) -> Optional[int]:
             mins = int(m_s or 0)
             return hours * 3600 + mins * 60
     return None
+
+
+def remaining_reset_seconds(
+    refresh_text: str,
+    anchor_epoch: int,
+    now_epoch: Optional[float] = None,
+) -> Optional[int]:
+    """Resolve remaining seconds until quota reset, adjusted by anchor timestamp when available."""
+    secs = parse_refresh_seconds(refresh_text)
+    if secs is None:
+        return None
+    if anchor_epoch > 0:
+        now_ts = time.time() if now_epoch is None else float(now_epoch)
+        return max(0, (anchor_epoch + secs) - int(now_ts))
+    return secs
+
+
+def compute_quota_pace(
+    remaining_pct: Optional[float],
+    reset_seconds: Optional[int],
+    window_seconds: int,
+) -> Optional[dict[str, Any]]:
+    """Compute burn pace vs elapsed window timeline and run-out forecast."""
+    if (
+        remaining_pct is None
+        or reset_seconds is None
+        or window_seconds <= 0
+        or reset_seconds < 0
+        or reset_seconds > window_seconds
+    ):
+        return None
+    rem = max(0.0, min(100.0, float(remaining_pct)))
+    used_pct = 100.0 - rem
+    elapsed_sec = window_seconds - int(reset_seconds)
+    elapsed_pct = (elapsed_sec / window_seconds) * 100.0
+    pace_delta_pct = int(round(used_pct - elapsed_pct))
+    if pace_delta_pct >= 5:
+        status = "over"
+    elif pace_delta_pct <= -5:
+        status = "under"
+    else:
+        status = "on_pace"
+
+    runs_out_seconds: Optional[int] = None
+    if elapsed_sec >= MIN_FORECAST_ELAPSED_SEC and 0.0 < rem < 100.0 and used_pct > elapsed_pct:
+        est = int((rem * elapsed_sec) / used_pct)
+        if 0 < est < reset_seconds:
+            runs_out_seconds = est
+
+    return {
+        "elapsed_pct": round(elapsed_pct, 1),
+        "used_pct": round(used_pct, 1),
+        "pace_delta_pct": pace_delta_pct,
+        "status": status,
+        "runs_out_seconds": runs_out_seconds,
+    }
 
 
 def _bucket_pcts(quota: QuotaSnapshot) -> dict[str, Any]:

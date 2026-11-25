@@ -258,7 +258,7 @@
     <header class="topbar">
       <div class="brand">
         <span>Faiz Control Center</span>
-        <span class="brand-pill">faiz-dash v0.2.1</span>
+        <span class="brand-pill">faiz-dash v0.3.0</span>
       </div>
       <nav class="nav-links">
         <a href="#features">Features</a>
@@ -308,12 +308,12 @@
           <p>Pure Bash + <code>jq</code> renders sub-80ms 2-bucket <code>Gemini + Claude</code> telemetry in unified deep slate-blue: Col-4 stacked <code>2&times;4</code> full-width water-fill across wide/ultrawide (<code>&gt;=155c</code>, uncapped) and split panes (<code>86–154c</code>, keeping exact 2dp parity, <code>Speed</code> label, and new-session placeholders), tight 5-line <code>4&times;2</code> slate-blue <code>[ ... ]</code> outline (<code>46–85c</code>), plus per-capsule color overrides (<code>capsule_colors</code>) and Apple Terminal 16-color fallback.</p>
         </div>
         <div class="card">
-          <h3>Exact 2dp /usage Sync (20s Active / 180s Idle)</h3>
-          <p>Isolated PTY probe guarded by <code>flock</code> uses dynamic <code>Within each group</code> + <code>rfind()</code> tail-frame parsing for fast convergence without TUI repaint tearing across <code>GEMINI MODELS</code> and <code>CLAUDE AND GPT MODELS</code>. Refreshes every 20s during active turns and idles cleanly at 180s.</p>
+          <h3>Native Stdin Quota + PTY Sync (20s / 180s / 600s)</h3>
+          <p>Reads live <code>stdin.quota</code> directly with zero PTY overhead (extending PTY cooldown to <code>600s</code>), prioritizing <code>terminal_width</code> over stale <code>$COLUMNS</code>, <code>current_usage</code> cache fallback, 60s expiry auto-reset, and <code>weekly == 0</code> coupling — backed by the <code>flock</code>-guarded PTY <code>/usage</code> probe when needed.</p>
         </div>
         <div class="card">
-          <h3>Zero-Clutter Bubbles &amp; Rex Sidebar</h3>
-          <p>Run <code>/faiz-dash</code> or <code>faiz-dash inspect</code> for full diagnostics in chat with zero column overhead, or toggle an on-demand 28% Rex right sidebar via <code>faiz-dash side</code>.</p>
+          <h3>Zero-Clutter Pace Forecast, Doctor &amp; Live Studio</h3>
+          <p>Run <code>faiz-dash inspect</code> for <code>Pace / Forecast</code> burn analysis, <code>faiz-dash doctor</code> for 9-point setup checks, <code>faiz-dash side</code> for a 28% Rex sidebar, or <code>faiz-dash config</code> with isolated scenario (<code>p</code>) &amp; width (<code>w</code>) preview cycling.</p>
         </div>
         <div class="card">
           <h3>Dual-Plane Cloud &amp; Worker Swarm</h3>
@@ -343,10 +343,11 @@
           <tr><th>Command</th><th>Purpose</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>faiz-dash inspect [--live] [--json]</code></td><td>Print non-interactive diagnostic summary of quotas, 24h burn, cloud backoff, mailbox, and telemetry</td></tr>
+          <tr><td><code>faiz-dash inspect [--live] [--json]</code></td><td>Print non-interactive diagnostic summary of quotas, <strong>Pace / Forecast</strong>, 24h burn, cloud backoff, mailbox, and telemetry</td></tr>
+          <tr><td><code>faiz-dash doctor [--markdown] [--json]</code></td><td>Run 9-point runtime, TrueColor, Nerd Font glyph, <code>settings.json</code> wiring, and snapshot cache check</td></tr>
           <tr><td><code>faiz-dash side</code></td><td>Toggle 28% right Textual sidebar inside Rex (<code>--focus=false</code>), with native Terminal fallback hint</td></tr>
           <tr><td><code>faiz-dash dock</code></td><td>Toggle bottom 3-column Dock inside Rex</td></tr>
-          <tr><td><code>faiz-dash config</code></td><td>Open interactive <code>en/zh</code> settings UI (supports <code>--style</code>, <code>--theme</code>, <code>--row-colors</code>, <code>--capsule-color &lt;id&gt;=&lt;color&gt;</code>, <code>--quota-precision</code>)</td></tr>
+          <tr><td><code>faiz-dash config</code></td><td>Open interactive <code>en/zh</code> settings UI (<code>p</code> scenario, <code>w</code> width preview; plus <code>--style</code>, <code>--theme</code>, <code>--row-colors</code>, <code>--capsule-color &lt;id&gt;=&lt;color&gt;</code>, <code>--quota-precision</code>)</td></tr>
           <tr><td><code>faiz-dash off / on / status</code></td><td>Manage startup auto-dock flag and inspect snapshot cache ages</td></tr>
         </tbody>
       </table>
@@ -365,7 +366,7 @@
         : "https://raw.githubusercontent.com/Jamie-z-Jianmin/faiz-control-center/main/docs/site";
       var cmds = {
         curl: "curl -fsSL " + origin + "/install.sh | bash",
-        git: "git clone https://github.com/Jamie-z-Jianmin/faiz-control-center.git\ncd faiz-control-center\npython3 -m pip install -e .\n./install.sh --link"
+        git: "git clone https://github.com/Jamie-z-Jianmin/faiz-control-center.git\ncd faiz-control-center\npython3 -m pip install -e .\n./install.sh --link --wire-settings"
       };
       var active = "curl";
       var codeEl = document.getElementById("install-cmd");

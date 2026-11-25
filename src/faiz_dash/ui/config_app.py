@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from typing import Any, Optional
 
 from rich.text import Text
@@ -47,6 +48,8 @@ def _resolve_statusline_script() -> Path:
 
 
 STATUSLINE_SCRIPT = _resolve_statusline_script()
+PREVIEW_SCENARIOS: tuple[str, ...] = ("live", "normal", "limits", "new_session")
+PREVIEW_WIDTHS: tuple[int | str, ...] = ("auto", 58, 91, 168)
 
 I18N: dict[str, dict[str, Any]] = {
     "en": {
@@ -74,6 +77,15 @@ I18N: dict[str, dict[str, Any]] = {
         "btn_save": "Save (S)",
         "btn_reset": "Reset Defaults",
         "btn_quit": "Quit (Q)",
+        "btn_preview_scenario": "Scenario (P): {val}",
+        "btn_preview_width": "Width (W): {val}",
+        "scenario_names": {
+            "live": "Live",
+            "normal": "Normal",
+            "limits": "Limits",
+            "new_session": "New",
+        },
+        "width_auto": "Auto",
         "preview_hdr": "Live TrueColor Preview:",
         "saved_msg": "Saved to {path}",
         "modules": {
@@ -130,6 +142,15 @@ I18N: dict[str, dict[str, Any]] = {
         "btn_save": "保存生效 (S)",
         "btn_reset": "恢复默认",
         "btn_quit": "退出 (Q)",
+        "btn_preview_scenario": "场景 (P): {val}",
+        "btn_preview_width": "宽度 (W): {val}",
+        "scenario_names": {
+            "live": "实时",
+            "normal": "正常",
+            "limits": "告警",
+            "new_session": "新话",
+        },
+        "width_auto": "自动",
         "preview_hdr": "实时 TrueColor 预览:",
         "saved_msg": "已保存至 {path}",
         "modules": {
@@ -231,12 +252,14 @@ class StatuslineConfigApp(App[None]):
         align-horizontal: left;
     }
     Button {
-        margin-right: 2;
+        margin-right: 1;
     }
     """
 
     BINDINGS = [
         Binding("s", "save_config", "Save"),
+        Binding("p", "cycle_preview_scenario", "Scenario"),
+        Binding("w", "cycle_preview_width", "Width"),
         Binding("q", "quit", "Quit"),
     ]
 
@@ -250,6 +273,8 @@ class StatuslineConfigApp(App[None]):
         self.disabled_flag_path = disabled_flag_path
         self.cfg: dict[str, Any] = load_statusline_config(self.config_path)
         self.auto_dock: bool = read_auto_dock_enabled(self.disabled_flag_path)
+        self.preview_scenario: str = "live"
+        self.preview_width: int | str = "auto"
 
     def _tr(self, lang: Optional[str] = None) -> dict[str, Any]:
         code = lang or str(self.cfg.get("language", "en"))
@@ -453,8 +478,18 @@ class StatuslineConfigApp(App[None]):
         with Horizontal(id="action-row"):
             yield Button(t["btn_save"], variant="primary", id="btn-save")
             yield Button(t["btn_reset"], variant="warning", id="btn-reset")
+            yield Button(self._preview_scenario_btn_label(t), id="btn-preview-scenario")
+            yield Button(self._preview_width_btn_label(t), id="btn-preview-width")
             yield Button(t["btn_quit"], id="btn-quit")
         yield Footer()
+
+    def _preview_scenario_btn_label(self, t: dict[str, Any]) -> str:
+        s_name = str(t["scenario_names"].get(self.preview_scenario, self.preview_scenario))
+        return str(t["btn_preview_scenario"]).format(val=s_name)
+
+    def _preview_width_btn_label(self, t: dict[str, Any]) -> str:
+        w_val = str(t["width_auto"]) if self.preview_width == "auto" else f"{self.preview_width}c"
+        return str(t["btn_preview_width"]).format(val=w_val)
 
     def on_mount(self) -> None:
         self._apply_i18n(str(self.cfg.get("language", "en")))
@@ -492,6 +527,8 @@ class StatuslineConfigApp(App[None]):
             self.query_one(f"#lbl-capcol-{cap_key}", Label).update(t["capsule_colors"][cap_key])
         self.query_one("#btn-save", Button).label = t["btn_save"]
         self.query_one("#btn-reset", Button).label = t["btn_reset"]
+        self.query_one("#btn-preview-scenario", Button).label = self._preview_scenario_btn_label(t)
+        self.query_one("#btn-preview-width", Button).label = self._preview_width_btn_label(t)
         self.query_one("#btn-quit", Button).label = t["btn_quit"]
 
     def _collect_cfg_from_widgets(self) -> dict[str, Any]:
@@ -551,12 +588,164 @@ class StatuslineConfigApp(App[None]):
     def _update_preview(self) -> None:
         draft = self._collect_cfg_from_widgets()
         t = self._tr(draft["language"])
-        preview_cols = int(draft.get("max_width") or 0) or 90
-        ansi_preview = self._render_preview(draft, preview_cols=preview_cols)
-        rich_out = Text.from_ansi(f"{t['preview_hdr']} ({preview_cols}c)\n{ansi_preview}")
+        if self.preview_width != "auto":
+            preview_cols = int(self.preview_width)
+        else:
+            preview_cols = int(draft.get("max_width") or 0) or 91
+        ansi_preview = self._render_preview(
+            draft,
+            preview_cols=preview_cols,
+            scenario=self.preview_scenario,
+        )
+        scenario_lbl = str(t["scenario_names"].get(self.preview_scenario, self.preview_scenario))
+        rich_out = Text.from_ansi(f"{t['preview_hdr']} ({preview_cols}c · {scenario_lbl})\n{ansi_preview}")
         self.query_one("#preview-box", Static).update(rich_out)
 
-    def _render_preview(self, draft: dict[str, Any], *, preview_cols: int = 90) -> str:
+    @staticmethod
+    def _seed_preview_scenario_home(fake_home: Path, scenario: str, env: dict[str, str]) -> bytes:
+        cache_dir = fake_home / ".agents" / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        now = time.time()
+        if scenario == "normal":
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 78.42,
+                        "pro_wk_pct": 84.15,
+                        "claude_5h_pct": 96.5,
+                        "claude_wk_pct": 88.2,
+                        "quota_gate": "GREEN",
+                        "tokens_1h": 640000,
+                        "pty_fetched_epoch": int(now),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "colab_state": "ONLINE",
+                        "idle_remaining_seconds": 2700,
+                        "mailbox_tasks_count": 0,
+                        "mailbox_failed_count": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            t_file = fake_home / "preview_normal.jsonl"
+            t_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 6))
+            t_e = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 2))
+            t_file.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "step_index": 1,
+                                "type": "PLANNER_RESPONSE",
+                                "status": "DONE",
+                                "created_at": t_s,
+                                "input_tokens": 1500,
+                                "cache_read_tokens": 48500,
+                                "output_tokens": 480,
+                            }
+                        ),
+                        json.dumps({"step_index": 2, "type": "GENERIC", "status": "DONE", "created_at": t_e}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            env["FAIZ_TRANSCRIPT_PATH"] = str(t_file)
+            return json.dumps({"context_window": {"used_percentage": 28}}).encode("utf-8")
+
+        if scenario == "limits":
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 12.4,
+                        "pro_wk_pct": 34.8,
+                        "claude_5h_pct": 62.1,
+                        "claude_wk_pct": 18.5,
+                        "quota_gate": "WARN_PRO",
+                        "tokens_1h": 2450000,
+                        "pty_fetched_epoch": int(now - 240),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "colab_state": "DEGRADED",
+                        "cloud_ok": False,
+                        "cloud_error_kind": "rate_limit",
+                        "mailbox_tasks_count": 2,
+                        "mailbox_failed_count": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            t_file = fake_home / "preview_limits.jsonl"
+            t_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 360))
+            t_e = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 355))
+            t_file.write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "step_index": 1,
+                                "type": "PLANNER_RESPONSE",
+                                "status": "DONE",
+                                "created_at": t_s,
+                                "input_tokens": 350000,
+                                "cache_read_tokens": 190000,
+                                "output_tokens": 90,
+                            }
+                        ),
+                        json.dumps({"step_index": 2, "type": "GENERIC", "status": "DONE", "created_at": t_e}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.utime(t_file, (now - 300, now - 300))
+            env["FAIZ_TRANSCRIPT_PATH"] = str(t_file)
+            return json.dumps({"context_window": {"used_percentage": 92}}).encode("utf-8")
+
+        # "new_session"
+        (cache_dir / "usage_snapshot.json").write_text(
+            json.dumps(
+                {
+                    "pro_5h_pct": 98.25,
+                    "pro_wk_pct": 94.1,
+                    "claude_5h_pct": 100.0,
+                    "claude_wk_pct": 100.0,
+                    "quota_gate": "GREEN",
+                    "tokens_1h": 0,
+                    "pty_fetched_epoch": int(now),
+                }
+            ),
+            encoding="utf-8",
+        )
+        (cache_dir / "cloud_snapshot.json").write_text(
+            json.dumps({"colab_state": "STOPPED", "mailbox_tasks_count": 0, "mailbox_failed_count": 0}),
+            encoding="utf-8",
+        )
+        env["FAIZ_TRANSCRIPT_PATH"] = ""
+        return json.dumps(
+            {
+                "conversation_id": "",
+                "context_window": {"used_percentage": 0, "total_input_tokens": 0, "total_output_tokens": 0},
+            }
+        ).encode("utf-8")
+
+    def _render_preview(
+        self,
+        draft: dict[str, Any],
+        *,
+        preview_cols: int = 91,
+        scenario: str = "live",
+    ) -> str:
         if not STATUSLINE_SCRIPT.exists():
             return json.dumps(draft, ensure_ascii=False)
 
@@ -569,13 +758,25 @@ class StatuslineConfigApp(App[None]):
             env["FAIZ_STATUSLINE_CONFIG"] = tmp_cfg
             env["FAIZ_TERM_WIDTH"] = str(preview_cols)
             env["COLORTERM"] = "truecolor"
-            res = subprocess.run(
-                [str(STATUSLINE_SCRIPT)],
-                input=b'{"context_window":{"used_percentage":43}}',
-                env=env,
-                capture_output=True,
-                timeout=2.0,
-            )
+            if scenario == "live":
+                res = subprocess.run(
+                    [str(STATUSLINE_SCRIPT)],
+                    input=b'{"context_window":{"used_percentage":43}}',
+                    env=env,
+                    capture_output=True,
+                    timeout=2.0,
+                )
+            else:
+                with tempfile.TemporaryDirectory() as fake_tmp:
+                    env["HOME"] = fake_tmp
+                    stdin_bytes = self._seed_preview_scenario_home(Path(fake_tmp), scenario, env)
+                    res = subprocess.run(
+                        [str(STATUSLINE_SCRIPT)],
+                        input=stdin_bytes,
+                        env=env,
+                        capture_output=True,
+                        timeout=2.0,
+                    )
             return res.stdout.decode("utf-8", errors="replace").strip() or "(empty)"
         except Exception as exc:
             return f"(preview error: {exc})"
@@ -584,6 +785,20 @@ class StatuslineConfigApp(App[None]):
                 os.unlink(tmp_cfg)
             except OSError:
                 pass
+
+    def action_cycle_preview_scenario(self) -> None:
+        idx = PREVIEW_SCENARIOS.index(self.preview_scenario) if self.preview_scenario in PREVIEW_SCENARIOS else 0
+        self.preview_scenario = PREVIEW_SCENARIOS[(idx + 1) % len(PREVIEW_SCENARIOS)]
+        t = self._tr(str(self.query_one("#opt-lang", Select).value))
+        self.query_one("#btn-preview-scenario", Button).label = self._preview_scenario_btn_label(t)
+        self._update_preview()
+
+    def action_cycle_preview_width(self) -> None:
+        idx = PREVIEW_WIDTHS.index(self.preview_width) if self.preview_width in PREVIEW_WIDTHS else 0
+        self.preview_width = PREVIEW_WIDTHS[(idx + 1) % len(PREVIEW_WIDTHS)]
+        t = self._tr(str(self.query_one("#opt-lang", Select).value))
+        self.query_one("#btn-preview-width", Button).label = self._preview_width_btn_label(t)
+        self._update_preview()
 
     def on_checkbox_changed(self, _: Checkbox.Changed) -> None:
         self._update_preview()
@@ -596,6 +811,10 @@ class StatuslineConfigApp(App[None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-save":
             self.action_save_config()
+        elif event.button.id == "btn-preview-scenario":
+            self.action_cycle_preview_scenario()
+        elif event.button.id == "btn-preview-width":
+            self.action_cycle_preview_width()
         elif event.button.id == "btn-reset":
             self.cfg = json.loads(json.dumps(DEFAULT_STATUSLINE_CONFIG))
             for key in MODULE_KEYS:

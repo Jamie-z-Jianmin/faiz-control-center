@@ -34,6 +34,13 @@ Route based on user arguments or intent:
   ```
   Return or summarize the exact JSON payload fields requested.
 
+- **`/faiz-dash doctor`**
+  Run:
+  ```bash
+  faiz-dash doctor --markdown
+  ```
+  Present the redacted Markdown environment diagnostic table and highlight any failing or missing prerequisites.
+
 - **`/faiz-dash side` (toggle right sidebar in Rex)**
   Run:
   ```bash

@@ -7,6 +7,7 @@ FAIZ_TARBALL_URL="${FAIZ_TARBALL_URL:-https://github.com/Jamie-z-Jianmin/faiz-co
 FAIZ_BRANCH="${FAIZ_BRANCH:-main}"
 FAIZ_INSTALL_DIR="${FAIZ_INSTALL_DIR:-$HOME/.local/share/faiz-control-center}"
 FAIZ_INSTALL_MODE="${FAIZ_INSTALL_MODE:-link}"
+FAIZ_WIRE_SETTINGS="${FAIZ_WIRE_SETTINGS:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 
 _log() {
@@ -52,7 +53,11 @@ if [ "$DRY_RUN" = "1" ]; then
     _log "Planned steps:"
     _log "  1. Fetch or update repository into $FAIZ_INSTALL_DIR"
     _log "  2. Create isolated virtualenv at $FAIZ_INSTALL_DIR/.venv and install package (-e .)"
-    _log "  3. Run $FAIZ_INSTALL_DIR/install.sh --$FAIZ_INSTALL_MODE"
+    if [ "$FAIZ_WIRE_SETTINGS" = "1" ]; then
+        _log "  3. Run $FAIZ_INSTALL_DIR/install.sh --$FAIZ_INSTALL_MODE --wire-settings"
+    else
+        _log "  3. Run $FAIZ_INSTALL_DIR/install.sh --$FAIZ_INSTALL_MODE"
+    fi
     exit 0
 fi
 
@@ -96,7 +101,9 @@ else
 fi
 
 chmod +x "$FAIZ_INSTALL_DIR/install.sh"
-"$FAIZ_INSTALL_DIR/install.sh" "--$FAIZ_INSTALL_MODE"
+install_flags=("--$FAIZ_INSTALL_MODE")
+[ "$FAIZ_WIRE_SETTINGS" = "1" ] && install_flags+=(--wire-settings)
+"$FAIZ_INSTALL_DIR/install.sh" "${install_flags[@]}"
 
 case ":${PATH}:" in
     *":$HOME/.local/bin:"*) ;;

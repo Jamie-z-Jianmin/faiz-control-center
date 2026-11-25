@@ -11,9 +11,13 @@ from typing import Any, Optional
 
 from .models import sanitize_for_json
 from .store import (
+    WINDOW_5H_SECONDS,
+    WINDOW_WEEKLY_SECONDS,
     StateStore,
+    compute_quota_pace,
     parse_refresh_seconds,
     read_backoff_remaining,
+    remaining_reset_seconds,
     summarize_probe_error,
 )
 
@@ -49,6 +53,17 @@ def _format_duration(seconds: Optional[int]) -> str:
     if mins > 0:
         return f"{mins}m{secs:02d}s"
     return f"{secs}s"
+
+
+def _format_forecast_duration(seconds: Optional[int]) -> str:
+    if seconds is None:
+        return "--"
+    total = max(0, int(seconds))
+    if total >= 86400:
+        days, rem = divmod(total, 86400)
+        hours = rem // 3600
+        return f"{days}d{hours}h"
+    return _format_duration(total)
 
 
 def _format_reset_window(refresh_text: str, anchor_epoch: int, now_epoch: float) -> str:
@@ -197,6 +212,10 @@ def collect_inspect_payload(
             b_dict = sanitize_for_json(bucket)
             b_dict["five_hour_remaining"] = _format_reset_window(bucket.five_hour_refresh, anchor, now_ts)
             b_dict["weekly_remaining"] = _format_reset_window(bucket.weekly_refresh, anchor, now_ts)
+            rem_5h = remaining_reset_seconds(bucket.five_hour_refresh, anchor, now_ts)
+            rem_wk = remaining_reset_seconds(bucket.weekly_refresh, anchor, now_ts)
+            b_dict["five_hour_pace"] = compute_quota_pace(bucket.five_hour_pct, rem_5h, WINDOW_5H_SECONDS)
+            b_dict["weekly_pace"] = compute_quota_pace(bucket.weekly_pct, rem_wk, WINDOW_WEEKLY_SECONDS)
             enriched_buckets.append(b_dict)
         quota_dict["buckets"] = enriched_buckets
 
@@ -240,6 +259,22 @@ def _pct_cell(pct: Any) -> str:
         return "--"
 
 
+def _format_single_pace(label: str, pace: Optional[dict[str, Any]]) -> str:
+    if not isinstance(pace, dict):
+        return ""
+    delta = int(pace.get("pace_delta_pct") or 0)
+    sign_txt = f"{delta:+d}%" if delta != 0 else "0%"
+    ro = pace.get("runs_out_seconds")
+    if ro is not None:
+        return f"{label} {sign_txt} (~{_format_forecast_duration(int(ro))})"
+    return f"{label} {sign_txt}"
+
+
+def _format_pace_cell(five_h_pace: Optional[dict[str, Any]], wk_pace: Optional[dict[str, Any]]) -> str:
+    parts = [p for p in (_format_single_pace("5h", five_h_pace), _format_single_pace("Wk", wk_pace)) if p]
+    return " / ".join(parts) if parts else "--"
+
+
 def _render_quota_section(quota: Optional[dict[str, Any]], usage_age: Optional[int]) -> list[str]:
     age_txt = _format_duration(usage_age) if usage_age is not None else "missing"
     if not quota:
@@ -266,15 +301,16 @@ def _render_quota_section(quota: Optional[dict[str, Any]], usage_age: Optional[i
         lines.extend(
             [
                 "",
-                "| Bucket | 5h | 5h Reset | Weekly | Weekly Reset |",
-                "| :--- | :---: | :--- | :---: | :--- |",
+                "| Bucket | 5h | 5h Reset | Weekly | Weekly Reset | Pace / Forecast |",
+                "| :--- | :---: | :--- | :---: | :--- | :--- |",
             ]
         )
         for b in buckets:
+            pace_cell = _format_pace_cell(b.get("five_hour_pace"), b.get("weekly_pace"))
             lines.append(
                 f"| {b.get('group_name', '?')} | {_pct_cell(b.get('five_hour_pct'))} | "
                 f"{b.get('five_hour_remaining', '--')} | {_pct_cell(b.get('weekly_pct'))} | "
-                f"{b.get('weekly_remaining', '--')} |"
+                f"{b.get('weekly_remaining', '--')} | {pace_cell} |"
             )
 
     burn = quota.get("burn") or {}

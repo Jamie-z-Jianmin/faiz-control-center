@@ -8,7 +8,13 @@ from rich.markup import escape
 from textual.widgets import Static
 
 from ...models import ModelBucketQuota, QuotaSnapshot
-from ...store import summarize_probe_error
+from ...store import (
+    WINDOW_5H_SECONDS,
+    WINDOW_WEEKLY_SECONDS,
+    compute_quota_pace,
+    remaining_reset_seconds,
+    summarize_probe_error,
+)
 
 
 def _fmt_tokens(val: int) -> str:
@@ -44,6 +50,37 @@ def _short_refresh(text: str) -> str:
     if "available" in text.lower():
         return "avail"
     return text[:10]
+
+
+def _fmt_pace_dur(seconds: int) -> str:
+    total = max(0, int(seconds))
+    if total >= 86400:
+        days, rem = divmod(total, 86400)
+        return f"{days}d{rem // 3600}h"
+    hours, rem = divmod(total, 3600)
+    mins = rem // 60
+    if hours > 0:
+        return f"{hours}h{mins:02d}m"
+    return f"{max(1, mins)}m"
+
+
+def _pace_markup(label: str, pace: Optional[dict[str, object]]) -> str:
+    if not pace:
+        return ""
+    delta = int(pace.get("pace_delta_pct") or 0)  # type: ignore[arg-type]
+    status = str(pace.get("status") or "on_pace")
+    ro = pace.get("runs_out_seconds")
+    if ro is not None and delta >= 20:
+        color = "bold red"
+    elif status == "over":
+        color = "yellow"
+    elif status == "under":
+        color = "green"
+    else:
+        color = "dim"
+    sign_txt = f"{delta:+d}%" if delta != 0 else "0%"
+    ro_txt = f" (~{_fmt_pace_dur(int(ro))})" if ro is not None else ""  # type: ignore[arg-type]
+    return f"{label} [{color}]{sign_txt}{ro_txt}[/{color}]"
 
 
 def _find_bucket(buckets: tuple[ModelBucketQuota, ...], keyword: str) -> Optional[ModelBucketQuota]:
@@ -104,12 +141,30 @@ class QuotaPanel(Static):
             + (f" [dim]{escape(pro_5h_ref)}[/dim]" if pro_5h_ref else "")
             + f" | Wk {_pct_text(pro_wk)}",
             line2,
-            f"Chan: Pro:[bold]{snap.channels.pro_count}[/bold] GCP:[bold]{snap.channels.gcp_count}[/bold]"
-            f" | Gate:[{gate_color}]{escape(snap.quota_gate)}[/{gate_color}]",
-            f"Global Burn: 1h [cyan]{_fmt_tokens(snap.burn.tokens_1h)}[/cyan]"
-            f" | 24h [cyan]{_fmt_tokens(snap.burn.tokens_24h)}[/cyan]"
-            f" | Cache [bold]{snap.burn.cache_hit_rate * 100:.0f}%[/bold]",
         ]
+        if gem is not None:
+            p5 = compute_quota_pace(
+                pro_5h,
+                remaining_reset_seconds(gem.five_hour_refresh, snap.pty_fetched_epoch),
+                WINDOW_5H_SECONDS,
+            )
+            pwk = compute_quota_pace(
+                pro_wk,
+                remaining_reset_seconds(gem.weekly_refresh, snap.pty_fetched_epoch),
+                WINDOW_WEEKLY_SECONDS,
+            )
+            pace_parts = [p for p in (_pace_markup("5h", p5), _pace_markup("Wk", pwk)) if p]
+            if pace_parts:
+                lines.append("Pace: " + " | ".join(pace_parts))
+        lines.extend(
+            [
+                f"Chan: Pro:[bold]{snap.channels.pro_count}[/bold] GCP:[bold]{snap.channels.gcp_count}[/bold]"
+                f" | Gate:[{gate_color}]{escape(snap.quota_gate)}[/{gate_color}]",
+                f"Global Burn: 1h [cyan]{_fmt_tokens(snap.burn.tokens_1h)}[/cyan]"
+                f" | 24h [cyan]{_fmt_tokens(snap.burn.tokens_24h)}[/cyan]"
+                f" | Cache [bold]{snap.burn.cache_hit_rate * 100:.0f}%[/bold]",
+            ]
+        )
 
         top_models = ", ".join(
             f"{escape(m.replace('gemini-', 'g'))}:{_fmt_tokens(t)}"

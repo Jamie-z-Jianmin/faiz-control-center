@@ -1,4 +1,4 @@
-"""Faiz Control Center v0.2 package."""
+"""Faiz Control Center v0.3 package."""
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 __all__ = ["__version__"]

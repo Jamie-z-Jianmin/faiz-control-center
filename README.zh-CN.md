@@ -14,13 +14,14 @@
 
 ## 核心特性
 
-- **`/usage` 双组实时配额对齐（`GEMINI MODELS` + `CLAUDE AND GPT MODELS`）**：通过隔离 PTY 探针采集 5 小时与每周剩余配额（带 `flock` 并发锁，以及基于 `Within each group` 与 `rfind()` 的动态尾帧收敛，兼顾极速返回与防重绘撕裂）；当检测到活跃对话消耗配额时自动切换为 **20 秒高频后台刷新**（空闲保持 180 秒零消耗）。当无独立 Argon 分组时自动以 `Claude` 胶囊与 TUI 面板行替代呈现，同时向后兼容旧版三分组快照与 `capsule_colors.argon` 配色覆盖。
+- **零延迟原生 `stdin` 配额快路径 + PTY `/usage` 双重保障（`GEMINI MODELS` + `CLAUDE AND GPT MODELS`）**：当 `agy` 通过 `stdin.quota` 注入实时配额时直接零开销解析 `remaining_fraction` 与 `reset_in_seconds`（自动将后台 PTY 轮询冷却拉长至 `600s`，仅用于补充 1h/24h 全域消耗）；否则无缝回退至隔离 PTY 探针（活跃 `20s` / 空闲 `180s`，带 `flock` 与动态尾帧收敛）。内置 `stdin.terminal_width` 优先识别、`reset_at_epoch + 60s` 过期自动重设与 `weekly == 0` 耦合归零保护。
 - **`<80ms` 纯 Bash + `jq` 热路径渲染**：永不阻塞输入提示符。采用统一**深石板蓝**默认视觉与全宽度自适应矩阵：第 4 栏垂直对齐 `Gemini + Claude` 双配额的 **`2×4` 全宽注水铺满矩阵**覆盖宽/超宽屏（`>=155` 列，无上限铺满）与中屏分屏（`86–154` 列，完整保留两位小数与 `Speed` 标签，并在新开会话自动补齐 `Cache --` / `Speed --` 对称占位），窄屏分屏（`46–85` 列）自动收紧为 **5 行 `4×2` 石板蓝线框 `[ ... ]` 胶囊**，并支持 `Apple_Terminal` 16 色降级与无云端配置零噪音隐藏。
-- **Prompt Cache 命中率与实时输出速率 (`t/s`)**：仅增量读取当前会话 `transcript.jsonl` 尾行，实时呈现缓存命中率、3m/4m TTL 冷却预警与真实输出速度 (`t/s`)。
-- **零常驻挤压的双通道检视**：
-  - **会话内气泡式诊断（`/faiz-dash` / `faiz-dash inspect`）**：不占用终端列宽，直接输出配额分组与重置倒计时、24 小时各模型 Token Burn、Cloud/Drive 退避与 `colab_source` / `colab_gpu` / `drive_backend` 遥测、Mailbox 队列核验与只读 APM 遥测摘要。
-  - **Rex 按需右侧边栏（`faiz-dash side`）**：在 Rex 内一键开关右侧 28% 宽度实时看板（`--focus=false` 不抢焦点，按 `q` 或再次执行 `faiz-dash side` 关闭），默认关闭启动自动 Dock（`faiz-dash off`）。
-- **中英双语设置工作室（`faiz-dash config`）**：交互式配置 8 个信息模块、5 种视觉风格（`capsule` / `powerline` / `pill` / `ghost` / `minimal`）、5 套主题配色（`google` / `nord` / `tokyo_night` / `catppuccin` / `custom`）、**按胶囊独立覆盖配色（`capsule_colors` / `--capsule-color`，其中 `argon` 自动向后兼容映射至 `claude`）**、行统一配色（`row_colors`）、`ring`/`bar` 指示器、配额精度（`exact` 2 位 / `1dp` / `int`）、启动开关及 Rex 分屏比例，底部提供实时 TrueColor 预览。
+- **Prompt Cache 命中率与实时输出速率 (`t/s`)**：仅增量读取当前会话 `transcript.jsonl` 尾行（未落盘前自动以 `stdin.context_window.current_usage` 兜底计算 Cache %），实时呈现缓存命中率、3m/4m TTL 冷却预警与真实输出速度 (`t/s`)。
+- **零常驻挤压的双通道检视与配额步速预测**：
+  - **会话内气泡式诊断（`/faiz-dash` / `faiz-dash inspect`）**：不占用终端列宽，输出配额分组与重置倒计时、**配额燃烧步速与耗尽预测（`Pace / Forecast`）**、24 小时各模型 Token Burn、Cloud/Drive 退避与 `colab_source` / `colab_gpu` / `drive_backend` 遥测、Mailbox 队列核验与只读 APM 遥测摘要。
+  - **一键环境体检（`faiz-dash doctor`）**：检测 Python 运行时、依赖包、`bash`/`jq`、TrueColor 支持、Nerd Font 胶囊字形（` ● `）、`statusline.sh` 权限、`agy settings.json` 接线与缓存健康度（支持 `--markdown` 隐私脱敏输出与 `--json`）。
+  - **Rex 按需右侧边栏（`faiz-dash side`）**：在 Rex 内一键开关右侧 28% 宽度实时看板（`--focus=false` 不抢焦点，并在 `QuotaPanel` 内显示精简 `Pace:` 提示；按 `q` 或再次执行 `faiz-dash side` 关闭），默认关闭启动自动 Dock（`faiz-dash off`）。
+- **中英双语设置工作室（`faiz-dash config`）**：交互式配置 8 个信息模块、5 种视觉风格（`capsule` / `powerline` / `pill` / `ghost` / `minimal`）、5 套主题配色（`google` / `nord` / `tokyo_night` / `catppuccin` / `custom`）、**按胶囊独立覆盖配色（`capsule_colors` / `--capsule-color`，其中 `argon` 自动向后兼容映射至 `claude`）**、行统一配色（`row_colors`）、`ring`/`bar` 指示器、配额精度（`exact` 2 位 / `1dp` / `int`）、启动开关及 Rex 分屏比例；预览区支持按 `p` 切换独立测试场景（实时 / 正常 / 告警 / 新话，隔离沙箱不污染真实缓存）与按 `w` 切换目标列宽（自动 / `58c` / `91c` / `168c`）。
 - **双平面云算力与异步队列扩展**：将 `google-colab-cli`（`colab --auth=adc`）控制平面（实时会话、GPU 型号、算力单元余额）与 Drive 数据平面解耦，支持 `gdrive` CLI 与 `rclone` 双后端自动优选（`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`），并集成 GCE Spot 实例监控、Drive 水位（含持久指数退避）与产物防假完成核验。
 
 ---
@@ -67,6 +68,8 @@ flowchart LR
 
 ```bash
 curl -fsSL https://faiz-control-center.pages.dev/install.sh | bash
+# 可选：自动安全写入 ~/.gemini/antigravity-cli/settings.json
+curl -fsSL https://faiz-control-center.pages.dev/install.sh | FAIZ_WIRE_SETTINGS=1 bash
 ```
 
 *（Cloudflare Pages 全球边缘节点加速；GitHub 备用源：`https://raw.githubusercontent.com/Jamie-z-Jianmin/faiz-control-center/main/docs/site/install.sh`）*
@@ -80,11 +83,11 @@ cd faiz-control-center
 # 1. 安装 Python 包与 Textual 依赖（建议在虚拟环境或 pipx 中执行）
 python3 -m pip install -e .
 
-# 2. 将 statusline、CLI 包装器、Rex Hook 与 /faiz-dash Skill 软链至 ~/.agents 与 ~/.local/bin
-./install.sh --link   # 外部用户如需独立拷贝安装可传 --copy
+# 2. 软链脚本与技能，并安全合并 settings.json（可传 --copy 独立安装）
+./install.sh --link --wire-settings
 ```
 
-确认 `~/.local/bin` 已加入 `PATH`，随后在 `~/.gemini/antigravity-cli/settings.json` 中配置 `statusLine`：
+确认 `~/.local/bin` 已加入 `PATH`。`--wire-settings` 会在修改前备份 `.bak.*`、校验 JSON 合法性并保留 `stack_with_default`/`padding` 等字段；如需手动配置 `~/.gemini/antigravity-cli/settings.json`：
 
 ```json
 {
@@ -98,9 +101,10 @@ python3 -m pip install -e .
 ### 快速验证
 
 ```bash
-faiz-dash inspect         # 读取缓存毫秒输出 Markdown 诊断报告
+faiz-dash doctor          # 9 项运行环境、TrueColor、Nerd Font、settings.json 与缓存体检
+faiz-dash inspect         # 读取缓存输出含 Pace / Forecast 的 Markdown 诊断报告
 faiz-dash inspect --live  # 立即触发最新探针后输出诊断报告
-faiz-dash config          # 打开双语实时预览设置中心
+faiz-dash config          # 打开支持多场景 (p) 与多宽度 (w) 实时预览的设置中心
 ```
 
 ---
@@ -109,10 +113,11 @@ faiz-dash config          # 打开双语实时预览设置中心
 
 | 指令 | 作用 |
 | :--- | :--- |
-| `faiz-dash inspect [--live] [--json]` | 非交互式输出配额、24h Burn、云端退避、Mailbox 与 APM 遥测报告 |
+| `faiz-dash inspect [--live] [--json]` | 非交互式输出配额、**Pace / Forecast 耗尽预测**、24h Burn、云端退避、Mailbox 与 APM 遥测报告 |
+| `faiz-dash doctor [--markdown] [--json]` | 运行 9 项安装与环境体检（Python、`bash`/`jq`、TrueColor、字形、配置与缓存） |
 | `faiz-dash side` | 在 Rex 中按需打开/关闭右侧边栏（保持主对话焦点；非 Rex 终端会提示替代方案） |
 | `faiz-dash dock` | 在 Rex 中按需打开/关闭底部三栏 Dock |
-| `faiz-dash config` | 启动设置 UI（也支持 CLI 参数：`--style`、`--indicator`、`--density`、`--secondary`、`--theme`、`--lang zh\|en`、`--quota-precision exact\|1dp\|int`、`--row-colors`、`--capsule-color <id>=<color>`、`--side-ratio`、`--auto-dock on\|off`、`--show`、`--reset`） |
+| `faiz-dash config` | 启动设置 UI（按 `p` 切换预览场景、`w` 切换预览宽度；亦支持 CLI 参数：`--style`、`--indicator`、`--density`、`--secondary`、`--theme`、`--lang zh\|en`、`--quota-precision exact\|1dp\|int`、`--row-colors`、`--capsule-color <id>=<color>`、`--side-ratio`、`--auto-dock on\|off`、`--show`、`--reset`） |
 | `faiz-dash off` / `on` / `status` | 关闭/开启新会话自动弹出底部 Dock（`~/.agents/cache/dash_disabled`）及查看缓存状态 |
 | `faiz-dash --once-json [--quota-only] [--no-pty]` | 单次采集快照并输出脱敏 JSON |
 | `faiz-dash --preset 1 \| 2` | 在当前终端直接以横排 Dock (`1`) 或竖排侧栏 (`2`) 启动全屏 TUI |
@@ -143,4 +148,4 @@ faiz-dash config          # 打开双语实时预览设置中心
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 51 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。
+[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 57 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。

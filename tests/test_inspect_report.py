@@ -15,7 +15,12 @@ from unittest import mock
 
 from faiz_dash.__main__ import main as cli_main
 from faiz_dash.inspect_report import collect_inspect_payload, format_inspect_output
-from faiz_dash.store import StateStore
+from faiz_dash.store import (
+    WINDOW_5H_SECONDS,
+    WINDOW_WEEKLY_SECONDS,
+    StateStore,
+    compute_quota_pace,
+)
 
 
 def _create_temp_telemetry_db(db_path: Path) -> None:
@@ -174,6 +179,8 @@ class TestInspectReport(unittest.TestCase):
             self.assertIn("THROTTLE_ARGON", md)
             self.assertIn("GEMINI MODELS", md)
             self.assertIn("2h40m", md)  # 2h50m minus 600s elapsed
+            self.assertIn("Pace / Forecast", md)
+            self.assertIn("5h +21% (~1h06m)", md)
             self.assertIn("gemini-4-hydrogen-high", md)
             self.assertIn("Drive 403 RATE_LIMIT", md)
             self.assertIn("stage_b10.tts.json", md)
@@ -187,6 +194,9 @@ class TestInspectReport(unittest.TestCase):
             raw_json = format_inspect_output(payload, as_json=True)
             parsed = json.loads(raw_json)
             self.assertEqual(parsed["telemetry"]["total_tasks"], 2)
+            self.assertEqual(parsed["quota"]["buckets"][0]["five_hour_pace"]["status"], "over")
+            self.assertEqual(parsed["quota"]["buckets"][0]["five_hour_pace"]["pace_delta_pct"], 21)
+            self.assertIsNotNone(parsed["quota"]["buckets"][0]["five_hour_pace"]["runs_out_seconds"])
             self.assertNotIn("secretToken123456", raw_json)
 
             # Portable SQLite fallback must work cleanly even when external telemetry.py is absent (CI runners)
@@ -218,6 +228,38 @@ class TestInspectReport(unittest.TestCase):
                 parsed = json.loads(buf_json.getvalue())
                 self.assertIsNone(parsed["quota"])
                 self.assertIsNone(parsed["cloud"])
+
+    def test_compute_quota_pace_cases(self) -> None:
+        # Over pace with forecast (elapsed >= 600s, est < reset_seconds)
+        over = compute_quota_pace(40.0, 9000, WINDOW_5H_SECONDS)
+        assert over is not None
+        self.assertEqual(over["status"], "over")
+        self.assertEqual(over["pace_delta_pct"], 10)
+        self.assertEqual(over["runs_out_seconds"], 6000)
+
+        # Warm-up window (<600s elapsed) suppresses run-out forecast
+        warmup = compute_quota_pace(85.0, WINDOW_5H_SECONDS - 300, WINDOW_5H_SECONDS)
+        assert warmup is not None
+        self.assertEqual(warmup["status"], "over")
+        self.assertIsNone(warmup["runs_out_seconds"])
+
+        # Under pace has headroom and no run-out forecast
+        under = compute_quota_pace(85.0, 3600, WINDOW_5H_SECONDS)
+        assert under is not None
+        self.assertEqual(under["status"], "under")
+        self.assertLess(under["pace_delta_pct"], 0)
+        self.assertIsNone(under["runs_out_seconds"])
+
+        # On pace within [-4, 4]
+        on = compute_quota_pace(48.0, 9000, WINDOW_5H_SECONDS)
+        assert on is not None
+        self.assertEqual(on["status"], "on_pace")
+
+        # Invalid/out-of-range inputs return None
+        self.assertIsNone(compute_quota_pace(None, 3600, WINDOW_5H_SECONDS))
+        self.assertIsNone(compute_quota_pace(50.0, None, WINDOW_5H_SECONDS))
+        self.assertIsNone(compute_quota_pace(50.0, -1, WINDOW_WEEKLY_SECONDS))
+        self.assertIsNone(compute_quota_pace(50.0, WINDOW_5H_SECONDS + 10, WINDOW_5H_SECONDS))
 
 
 if __name__ == "__main__":
