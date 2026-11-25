@@ -440,6 +440,11 @@ fi
 
 if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[[:space:]]*:[[:space:]]*[1-9] ]]; then
     JQ_MATRIX_PACK='
+  def pair_quota_col4($items):
+    if ($items | length) == 8 and ($items[3].cap_id == "gemini") and ($items[4].cap_id == "claude" or $items[4].cap_id == "argon") then
+      [$items[0], $items[1], $items[2], $items[3], $items[5], $items[6], $items[7], $items[4]]
+    else $items end;
+
   def compact_2x4_items($items; $lvl):
     [
       $items[] |
@@ -450,9 +455,9 @@ if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[
           [
             range(0; length) as $pi |
             .[$pi] |
-            if ($lvl >= 2) and ($pi == 0) and (.r == "lbl") and (.t == "Gemini ") then
+            if ($pi == 0) and (.r == "lbl") and (.t == "Gemini ") then
               .t = "Gem "
-            elif (.r == "val") and (.t | test("^[0-9]+\\.[0-9]+%$")) then
+            elif ($lvl >= 3) and (.r == "val") and (.t | test("^[0-9]+\\.[0-9]+%$")) then
               .t |= ((.[0:-1] | tonumber | round | tostring) + "%")
             else . end
           ]
@@ -462,9 +467,9 @@ if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[
           [
             range(0; length) as $pi |
             .[$pi] |
-            if ($lvl >= 2) and ($pi == 0) and (.r == "lbl") and (.t == "Claude ") then
+            if ($pi == 0) and (.r == "lbl") and (.t == "Claude ") then
               .t = "Cla "
-            elif (.r == "val") and (.t | test("^[0-9]+\\.[0-9]+%$")) then
+            elif ($lvl >= 3) and (.r == "val") and (.t | test("^[0-9]+\\.[0-9]+%$")) then
               .t |= ((.[0:-1] | tonumber | round | tostring) + "%")
             else . end
           ]
@@ -487,11 +492,13 @@ if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[
       {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
     else
       ((($items | length) + 1) / 2 | floor) as $cols2 |
+      pair_quota_col4($items) as $m2_items |
       (
-        pack_grid($items; $cols2; $max_w; $sep_w; $style; $expand_w) //
+        pack_grid($m2_items; $cols2; $max_w; $sep_w; $style; $expand_w) //
         (if ($max_w >= 86) and ($style != "minimal") then
-          (pack_grid(compact_2x4_items($items; 1); $cols2; $max_w; $sep_w; $style; $expand_w) //
-           pack_grid(compact_2x4_items($items; 2); $cols2; $max_w; $sep_w; $style; $expand_w))
+          (pack_grid(compact_2x4_items($m2_items; 1); $cols2; $max_w; $sep_w; $style; $expand_w) //
+           pack_grid(compact_2x4_items($m2_items; 2); $cols2; $max_w; $sep_w; $style; $expand_w) //
+           pack_grid(compact_2x4_items($m2_items; 3); $cols2; $max_w; $sep_w; $style; $expand_w))
          else null end)
       ) as $g2 |
       if $g2 != null then
@@ -508,12 +515,18 @@ if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[
     end;'
 else
     JQ_MATRIX_PACK='
+  def pair_quota_col4($items):
+    if ($items | length) == 8 and ($items[3].cap_id == "gemini") and ($items[4].cap_id == "claude" or $items[4].cap_id == "argon") then
+      [$items[0], $items[1], $items[2], $items[3], $items[5], $items[6], $items[7], $items[4]]
+    else $items end;
+
   def pack_matrix_rows($items; $max_w; $do_wrap; $sep_w; $style; $expand_w):
     if ($items | length) < 5 or ($do_wrap | not) or $max_w <= 0 then
       {mode: "flow", rows: pack_rows($items; $max_w; $do_wrap; $sep_w; $style)}
     else
       ((($items | length) + 1) / 2 | floor) as $cols2 |
-      pack_grid($items; $cols2; $max_w; $sep_w; $style; $expand_w) as $g2 |
+      pair_quota_col4($items) as $m2_items |
+      pack_grid($m2_items; $cols2; $max_w; $sep_w; $style; $expand_w) as $g2 |
       if $g2 != null then
         {mode: "2x4", rows: $g2}
       else
@@ -598,8 +611,7 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
 
   def expand_col_ws($col_ws; $max_w; $sep_w):
     (($col_ws | add) + ((($col_ws | length) - 1) * $sep_w)) as $cur_w |
-    (if $max_w > 210 then 210 else $max_w end) as $cap_w |
-    ($cap_w - $cur_w) as $extra |
+    ($max_w - $cur_w) as $extra |
     if $extra <= 0 or (($col_ws | length) == 0) then $col_ws
     else
       reduce range(0; $extra) as $_ (
@@ -886,6 +898,14 @@ JQ_MAIN='
       slot: $cmeta[0],
       tint: $cmeta[2]
     }]
+  elif $m_cache and $use_adaptive_2row and ($ctx != null) then
+    . + [{
+      cap_id: "cache",
+      icon: "○",
+      parts: [{t: $L.cache, r: "lbl"}, {t: "--", r: "lbl"}],
+      slot: "muted",
+      tint: false
+    }]
   else . end |
 
   if $m_speed and ($live_tps != null) and ($live_tps > 0) then
@@ -905,12 +925,20 @@ JQ_MAIN='
       slot: $smeta[0],
       tint: $smeta[1]
     }]
+  elif $m_speed and $use_adaptive_2row and ($ctx != null) then
+    . + [{
+      cap_id: "speed",
+      icon: "▸",
+      parts: (if $narrow_4x2 then [{t: "--", r: "lbl"}] else [{t: $L.speed, r: "lbl"}, {t: "--", r: "lbl"}] end),
+      slot: "muted",
+      tint: false
+    }]
   else . end |
 
   if $m_quota then
     if $pro5 != null or $prowk != null or $arg != null or $cla5 != null or $cla != null then
       ($use_adaptive_2row and ($eff_cols < 155) and ($q_prec != "int")) as $compact_gem_lbl |
-      (if ($cla_tight and $cla_show and $q_prec != "int") then "1dp" else $q_prec end) as $gem_prec |
+      (if ($arg != null and $cla_tight and $cla_show and $q_prec != "int") then "1dp" else $q_prec end) as $gem_prec |
       (
         if $compact_gem_lbl then
           (if $pro5 != null then
@@ -1184,7 +1212,7 @@ JQ_MAIN='
 JQ_TAIL=' |
   (if ($eff_style == "minimal") then " | " elif $wide_rich or ($narrow_4x2 and ($eff_cols >= 50)) then "  " elif ($use_compact or $use_adaptive_2row) then " " else "  " end) as $base_sep |
   ($base_sep | disp_len) as $base_sep_w |
-  (if $use_adaptive_2row then pack_matrix_rows(.; $eff_cols; $auto_wrap; $base_sep_w; $eff_style; $wide_rich)
+  (if $use_adaptive_2row then pack_matrix_rows(.; $eff_cols; $auto_wrap; $base_sep_w; $eff_style; ($wide_rich or ($eff_cols >= 86)))
    else {mode: "flow", rows: pack_rows(.; $eff_cols; $auto_wrap; $base_sep_w; $eff_style)} end) as $grid_res |
   ($grid_res.mode) as $grid_mode |
   ($grid_res.rows) as $rows |

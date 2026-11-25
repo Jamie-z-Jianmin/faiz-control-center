@@ -391,7 +391,7 @@ class TestShellScripts(unittest.TestCase):
             plain_gh = re.sub(r"\x1b\[[0-9;]*m", "", out_gh)
             self.assertNotIn("\x1b[48;2;", out_gh)
             self.assertIn("107;114;128", out_gh)
-            self.assertIn("[◑ Context 40% ■■□□□□]", plain_gh)
+            self.assertRegex(plain_gh, r"\[◑ Context 40% ■■□□□□\s*\]")
 
             # Powerline style with Google theme uses Material 800 deep shades + crisp white fg
             cfg_file.write_text(json.dumps({"style": "powerline", "theme": "google", "indicator": "bar"}), encoding="utf-8")
@@ -1045,14 +1045,15 @@ esac
             self.assertNotIn("Argon", plain_wide)
             self.assertEqual(plain_wide.count("Claude"), 1)
 
-            # 2. Auto narrow 90 cols (2x4): stays 4-line aligned matrix, shows Cla/Claude and ! warning, no Argon
+            # 2. Auto narrow 90 cols (2x4): stays 4-line aligned full-width matrix (88c), keeps exact 2dp, stacks Claude in Col 4
             res_90 = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "90"}, capture_output=True, check=True)
             plain_90 = re.sub(r"\x1b\[[0-9;]*m", "", res_90.stdout.decode("utf-8", errors="replace"))
             lines_90 = plain_90.splitlines()
             self.assertEqual(len(lines_90), 4)
-            self.assertEqual(len({len(ln) for ln in lines_90}), 1)
-            self.assertTrue("Claude " in lines_90[3] or "Cla " in lines_90[3], lines_90[3])
-            self.assertIn("!", lines_90[3])
+            self.assertEqual({len(ln) for ln in lines_90}, {88})
+            self.assertIn("Gemini 15.25%·42.50%", lines_90[1])
+            self.assertIn("Claude 100.00%·100.00%!", lines_90[3])
+            self.assertTrue(lines_90[3].rstrip().endswith("Claude 100.00%·100.00%! "))
             self.assertNotIn("Arg", plain_90)
 
             # 3. Auto narrow 46 cols (4x2): stays 5-line aligned matrix, shows Cla, no Argon
@@ -1153,7 +1154,7 @@ esac
             env.pop("FAIZ_TRANSCRIPT_PATH", None)
             env.pop("FAIZ_TERM_WIDTH", None)
 
-            # Case A: empty conversation_id before first prompt (90 cols)
+            # Case A: empty conversation_id before first prompt (90 cols) -> full 2x4 symmetry with placeholders
             payload_a = json.dumps(
                 {
                     "conversation_id": "",
@@ -1163,12 +1164,18 @@ esac
             ).encode("utf-8")
             res_a = subprocess.run([str(STATUSLINE_SH)], input=payload_a, env=env, capture_output=True, check=True)
             plain_a = re.sub(r"\x1b\[[0-9;]*m", "", res_a.stdout.decode("utf-8", errors="replace"))
+            lines_a = plain_a.splitlines()
+            self.assertEqual(len(lines_a), 4)
+            self.assertEqual({len(ln) for ln in lines_a}, {88})
             self.assertIn("Ctx 0%", plain_a)
+            self.assertIn("Cache --", plain_a)
+            self.assertIn("Speed --", plain_a)
+            self.assertIn("Gemini 35.92%·82.37%", lines_a[3])
+            self.assertIn("Claude 100.00%·10.27%", lines_a[3])
             self.assertIn("Burn 0", plain_a)
             self.assertNotIn("10.98M", plain_a)
             self.assertNotIn("2.6M", plain_a)
-            self.assertNotIn("Cache", plain_a)
-            self.assertNotIn("Speed", plain_a)
+            self.assertNotIn("t/s", plain_a)
 
             # Case B: new conversation_id assigned, transcript_path not yet written
             payload_b = json.dumps(
@@ -1182,19 +1189,27 @@ esac
 
             res_b90 = subprocess.run([str(STATUSLINE_SH)], input=payload_b, env={**env, "FAIZ_TERM_WIDTH": "90"}, capture_output=True, check=True)
             plain_b90 = re.sub(r"\x1b\[[0-9;]*m", "", res_b90.stdout.decode("utf-8", errors="replace"))
+            lines_b90 = plain_b90.splitlines()
+            self.assertEqual(len(lines_b90), 4)
+            self.assertEqual({len(ln) for ln in lines_b90}, {88})
             self.assertIn("Ctx 0%", plain_b90)
+            self.assertIn("Cache --", plain_b90)
+            self.assertIn("Speed --", plain_b90)
             self.assertIn("Burn 0", plain_b90)
             self.assertNotIn("10.98M", plain_b90)
-            self.assertNotIn("Cache", plain_b90)
-            self.assertNotIn("Speed", plain_b90)
+            self.assertNotIn("t/s", plain_b90)
 
             res_b180 = subprocess.run([str(STATUSLINE_SH)], input=payload_b, env={**env, "FAIZ_TERM_WIDTH": "180"}, capture_output=True, check=True)
             plain_b180 = re.sub(r"\x1b\[[0-9;]*m", "", res_b180.stdout.decode("utf-8", errors="replace"))
+            lines_b180 = plain_b180.splitlines()
+            self.assertEqual(len(lines_b180), 4)
+            self.assertEqual({len(ln) for ln in lines_b180}, {178})
             self.assertIn("Context 0%", plain_b180)
+            self.assertIn("Cache --", plain_b180)
+            self.assertIn("Speed --", plain_b180)
             self.assertIn("Session 0 · 1h:2.6M", plain_b180)
             self.assertNotIn("10.98M", plain_b180)
-            self.assertNotIn("Cache", plain_b180)
-            self.assertNotIn("Speed", plain_b180)
+            self.assertNotIn("tok/s", plain_b180)
 
             # Case C: small decimal used_percentage (0.5) or >=1% with explicit total_input_tokens: 0 must NOT fall back to ls -1t
             for pct in (0.5, 1.5):
@@ -1208,9 +1223,10 @@ esac
                 res_c = subprocess.run([str(STATUSLINE_SH)], input=payload_c, env=env, capture_output=True, check=True)
                 plain_c = re.sub(r"\x1b\[[0-9;]*m", "", res_c.stdout.decode("utf-8", errors="replace"))
                 self.assertIn("Burn 0", plain_c)
+                self.assertIn("Cache --", plain_c)
+                self.assertIn("Speed --", plain_c)
                 self.assertNotIn("10.98M", plain_c)
-                self.assertNotIn("Cache", plain_c)
-                self.assertNotIn("Speed", plain_c)
+                self.assertNotIn("t/s", plain_c)
 
     def test_statusline_concurrent_session_isolation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1356,6 +1372,130 @@ esac
             self.assertIn("Cache 90.0%", plain_large)
             self.assertIn("Speed 100 tok/s", plain_large)
             self.assertIn("Session 2.5K", plain_large)
+
+    def test_statusline_scheme_a_full_width_2x4_precision_and_ultrawide(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp)
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            t_s = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 6))
+            t_e = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 2))
+
+            t_active = fake_home / "active.jsonl"
+            t_active.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_s, "input_tokens": 90000, "cache_read_tokens": 969348, "output_tokens": 652}),
+                        json.dumps({"step_index": 2, "type": "GENERIC", "status": "DONE", "created_at": t_e}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            t_cold = fake_home / "cold.jsonl"
+            t_cs = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 360))
+            t_ce = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 356))
+            t_cold.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": t_cs, "input_tokens": 370000, "cache_read_tokens": 11969132, "output_tokens": 868}),
+                        json.dumps({"step_index": 2, "type": "GENERIC", "status": "DONE", "created_at": t_ce}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.utime(t_cold, (now - 300, now - 300))
+
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 97.84,
+                        "pro_wk_pct": 80.74,
+                        "claude_5h_pct": 95.25,
+                        "claude_wk_pct": 88.5,
+                        "quota_gate": "GREEN",
+                        "tokens_1h": 1800000,
+                        "pty_fetched_epoch": int(now),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps({"colab_state": "STOPPED", "mailbox_tasks_count": 0, "mailbox_failed_count": 2}),
+                encoding="utf-8",
+            )
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_TRANSCRIPT_PATH": str(t_active),
+                "FAIZ_TERM_WIDTH": "91",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            payload = json.dumps({"context_window": {"used_percentage": 21}}).encode("utf-8")
+
+            # 1. 91-col Active with Claude <99.9% keeps full 2dp precision, Speed label, and 89/89 full fill
+            res_91 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env, capture_output=True, check=True)
+            lines_91 = re.sub(r"\x1b\[[0-9;]*m", "", res_91.stdout.decode("utf-8", errors="replace")).splitlines()
+            self.assertEqual(len(lines_91), 4)
+            self.assertEqual({len(ln) for ln in lines_91}, {89})
+            self.assertIn("Speed 163t/s", lines_91[1])
+            self.assertIn("Gemini 97.84%·80.74%", lines_91[1])
+            self.assertIn("Claude 95.25%·88.50%", lines_91[3])
+            self.assertTrue(lines_91[1].rstrip().endswith("Gemini 97.84%·80.74% "))
+            self.assertTrue(lines_91[3].rstrip().endswith("Claude 95.25%·88.50% "))
+
+            # 2. 91-col Worst-Case Stress (cold + online + WARN_PRO + 2R · 1F) keeps full labels & 2dp at 89/89
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "pro_5h_pct": 100.0,
+                        "pro_wk_pct": 100.0,
+                        "claude_5h_pct": 100.0,
+                        "claude_wk_pct": 100.0,
+                        "quota_gate": "WARN_PRO",
+                        "tokens_1h": 2400000,
+                        "pty_fetched_epoch": int(now),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps({"colab_state": "ONLINE", "idle_remaining_seconds": 2685, "mailbox_tasks_count": 2, "mailbox_failed_count": 1}),
+                encoding="utf-8",
+            )
+            res_stress = subprocess.run(
+                [str(STATUSLINE_SH)],
+                input=json.dumps({"context_window": {"used_percentage": 95}}).encode("utf-8"),
+                env={**env, "FAIZ_TRANSCRIPT_PATH": str(t_cold)},
+                capture_output=True,
+                check=True,
+            )
+            lines_stress = re.sub(r"\x1b\[[0-9;]*m", "", res_stress.stdout.decode("utf-8", errors="replace")).splitlines()
+            self.assertEqual(len(lines_stress), 4)
+            self.assertEqual({len(ln) for ln in lines_stress}, {89})
+            self.assertIn("Cache 97% cold", lines_stress[1])
+            self.assertIn("Speed 217t/s", lines_stress[1])
+            self.assertIn("Gemini 100.00%·100.00%", lines_stress[1])
+            self.assertIn("Claude 100.00%·100.00%!", lines_stress[3])
+
+            # 3. 240-col Ultrawide fills edge-to-edge (238/238, no 210c cap) with unified Col 4 quota alignment
+            res_240 = subprocess.run(
+                [str(STATUSLINE_SH)],
+                input=payload,
+                env={**env, "FAIZ_TERM_WIDTH": "240"},
+                capture_output=True,
+                check=True,
+            )
+            lines_240 = re.sub(r"\x1b\[[0-9;]*m", "", res_240.stdout.decode("utf-8", errors="replace")).splitlines()
+            self.assertEqual(len(lines_240), 4)
+            self.assertEqual({len(ln) for ln in lines_240}, {238})
+            self.assertIn("Gemini 5h:100.00%", lines_240[1])
+            self.assertIn("Claude 5h:100.00%", lines_240[3])
 
 
 if __name__ == "__main__":
