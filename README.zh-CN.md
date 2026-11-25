@@ -15,7 +15,7 @@
 ## 核心特性
 
 - **`/usage` 双组实时配额对齐（`GEMINI MODELS` + `CLAUDE AND GPT MODELS`）**：通过隔离 PTY 探针采集 5 小时与每周剩余配额（带 `flock` 并发锁，以及基于 `Within each group` 与 `rfind()` 的动态尾帧收敛，兼顾极速返回与防重绘撕裂）；当检测到活跃对话消耗配额时自动切换为 **20 秒高频后台刷新**（空闲保持 180 秒零消耗）。当无独立 Argon 分组时自动以 `Claude` 胶囊与 TUI 面板行替代呈现，同时向后兼容旧版三分组快照与 `capsule_colors.argon` 配色覆盖。
-- **`<80ms` 纯 Bash + `jq` 热路径渲染**：永不阻塞输入提示符。采用统一**深石板蓝**默认视觉与四级自适应矩阵：宽屏（`>=155` 列）自动扩展为完整标签 **`2×4` 铺满矩阵**，中屏分屏（`88–154` 列）保持 **4 行紧凑 `2×4` 玻璃胶囊**（内建 `cold` 标签兜底防塌缩），窄屏分屏（`46–86` 列）自动收紧为 **5 行 `4×2` 石板蓝线框 `[ ... ]` 胶囊**，并支持 `Apple_Terminal` 16 色降级与无云端配置零噪音隐藏。
+- **`<80ms` 纯 Bash + `jq` 热路径渲染**：永不阻塞输入提示符。采用统一**深石板蓝**默认视觉与全宽度自适应矩阵：第 4 栏垂直对齐 `Gemini + Claude` 双配额的 **`2×4` 全宽注水铺满矩阵**覆盖宽/超宽屏（`>=155` 列，无上限铺满）与中屏分屏（`86–154` 列，完整保留两位小数与 `Speed` 标签，并在新开会话自动补齐 `Cache --` / `Speed --` 对称占位），窄屏分屏（`46–85` 列）自动收紧为 **5 行 `4×2` 石板蓝线框 `[ ... ]` 胶囊**，并支持 `Apple_Terminal` 16 色降级与无云端配置零噪音隐藏。
 - **Prompt Cache 命中率与实时输出速率 (`t/s`)**：仅增量读取当前会话 `transcript.jsonl` 尾行，实时呈现缓存命中率、3m/4m TTL 冷却预警与真实输出速度 (`t/s`)。
 - **零常驻挤压的双通道检视**：
   - **会话内气泡式诊断（`/faiz-dash` / `faiz-dash inspect`）**：不占用终端列宽，直接输出配额分组与重置倒计时、24 小时各模型 Token Burn、Cloud/Drive 退避与 `colab_source` / `colab_gpu` / `drive_backend` 遥测、Mailbox 队列核验与只读 APM 遥测摘要。
@@ -143,4 +143,4 @@ faiz-dash config          # 打开双语实时预览设置中心
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 47 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。
+[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 51 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。

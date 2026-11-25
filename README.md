@@ -15,7 +15,7 @@ English | [简体中文](README.zh-CN.md)
 ## Highlights
 
 - **Exact `/usage` Quota Parity (`GEMINI MODELS` + `CLAUDE AND GPT MODELS`)**: Captures live 5-hour & weekly remaining limits via an isolated PTY `/usage` probe (`flock`-guarded, dynamic `Within each group` + `rfind()` frame settle for fast PTY convergence without repaint tearing) with **activity-aware 20s refresh** when active turns burn quota (180s when idle). Renders dedicated `Gemini` and `Claude` capsules & TUI rows when standalone Argon is absent while staying backward-compatible with legacy 3-bucket snapshots and `capsule_colors.argon` overrides.
-- **Sub-80ms Pure Bash + `jq` StatusLine**: Never blocks prompt rendering. Features a unified **deep slate-blue** palette with a 4-tier responsive matrix: full-label **wide `2×4` glass spread** (`>=155` cols), compact 4-line **`2×4` glass** (`88–154` cols, with cold-tag compaction rescue), tight **5-line `4×2` slate-blue `[ ... ]` outline** (`46–86` cols), plus `Apple_Terminal` 16-color fallback and zero-noise cloud hiding.
+- **Sub-80ms Pure Bash + `jq` StatusLine**: Never blocks prompt rendering. Features a unified **deep slate-blue** palette with a responsive matrix: Col-4 stacked `Gemini + Claude` **`2×4` full-width water-fill** across wide/ultrawide (`>=155` cols, uncapped) and split panes (`86–154` cols, preserving exact 2-decimal precision, `Speed` label, and symmetrical `Cache --` / `Speed --` new-session placeholders), tight **5-line `4×2` slate-blue `[ ... ]` outline** (`46–85` cols), plus `Apple_Terminal` 16-color fallback and zero-noise cloud hiding.
 - **Prompt Cache Hit & Live Token Speed (`t/s`)**: Reads only the trailing tail of the active session `transcript.jsonl` to surface Cache Hit %, 3m/4m TTL cooldown alerts, and real-time output generation speed (`t/s`).
 - **Zero-Clutter On-Demand Inspection**:
   - **In-chat Diagnostic Bubble (`/faiz-dash` / `faiz-dash inspect`)**: Outputs a clean Markdown summary of all quota buckets, reset countdowns, 24h per-model token burn, cloud/drive backoff & `colab_source` / `colab_gpu` / `drive_backend` telemetry, mailbox items, and read-only APM telemetry without occupying terminal width.
@@ -174,7 +174,7 @@ If your workflow runs remote workers on Google Colab + Drive (`gdrive` CLI / `rc
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-GitHub Actions CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) verifies shell syntax, `styles.tcss` wheel packaging, and all 47 unit/integration/Textual Pilot tests across Ubuntu & macOS.
+GitHub Actions CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) verifies shell syntax, `styles.tcss` wheel packaging, and all 51 unit/integration/Textual Pilot tests across Ubuntu & macOS.
 
 ## License
 
