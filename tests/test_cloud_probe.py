@@ -417,6 +417,148 @@ class TestCloudProbe(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(snap_stopped.stale)
             self.assertEqual(len(snap_stopped.gce_instances), 1)
 
+    async def test_gce_rest_api_fields_pagination_401_retry_and_secret_token_cache(self) -> None:
+        import io
+        import urllib.error
+        import urllib.parse
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache_dir = root / "cache"
+            cache_dir.mkdir()
+            adc_file = root / "adc.json"
+            adc_file.write_text(
+                json.dumps({
+                    "type": "authorized_user",
+                    "client_id": "cid-123",
+                    "client_secret": "csec-xyz",
+                    "refresh_token": "rt-secret",
+                    "quota_project_id": "faiz-gpu-engine",
+                }),
+                encoding="utf-8",
+            )
+            probe = CloudProbe(
+                FakeDriveGateway(status_payload={"status": "STOPPED"}),
+                gcloud_bin="",
+                gcp_project="faiz-gpu-engine",
+                backoff_path=cache_dir / "cloud_backoff.json",
+                cache_dir=cache_dir,
+                adc_path=adc_file,
+            )
+
+            seen_urls: list[str] = []
+            oauth_calls = 0
+            gce_calls = 0
+
+            class _FakeResp:
+                def __init__(self, payload: dict[str, object]) -> None:
+                    self._raw = json.dumps(payload).encode("utf-8")
+
+                def read(self) -> bytes:
+                    return self._raw
+
+                def __enter__(self) -> "_FakeResp":
+                    return self
+
+                def __exit__(self, *args: object) -> None:
+                    return None
+
+            def fake_urlopen(req: object, timeout: float = 0.0) -> _FakeResp:
+                nonlocal oauth_calls, gce_calls
+                url = getattr(req, "full_url", "")
+                if "oauth2.googleapis.com/token" in url:
+                    oauth_calls += 1
+                    return _FakeResp({"access_token": f"ya29.real_token_{oauth_calls}", "expires_in": 3600})
+                seen_urls.append(url)
+                gce_calls += 1
+                if gce_calls == 1:
+                    raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, io.BytesIO(b""))  # type: ignore[arg-type]
+                if "pageToken=" not in url:
+                    return _FakeResp({
+                        "nextPageToken": "p2",
+                        "items": {
+                            "zones/us-central1-a": {
+                                "instances": [{
+                                    "name": "spot-worker-1",
+                                    "zone": "https://www.googleapis.com/compute/v1/projects/faiz-gpu-engine/zones/us-central1-a",
+                                    "machineType": "https://www.googleapis.com/compute/v1/projects/faiz-gpu-engine/machineTypes/n2-highcpu-4",
+                                    "creationTimestamp": "2026-11-26T06:00:00.123-07:00",
+                                    "status": "RUNNING",
+                                    "scheduling": {"provisioningModel": "SPOT"},
+                                }]
+                            },
+                            "zones/us-east1-b": {"warning": {"code": "NO_RESULTS_ON_PAGE"}},
+                        },
+                    })
+                return _FakeResp({"items": {}})
+
+            with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                instances, err = await probe._fetch_gce_instances()
+
+            self.assertIsNone(err)
+            self.assertEqual(oauth_calls, 2)  # initial + 401 refresh retry
+            self.assertEqual(len(instances), 1)
+            self.assertEqual(instances[0].name, "spot-worker-1")
+            self.assertEqual(instances[0].zone, "us-central1-a")
+            self.assertEqual(instances[0].machine_type, "n2-highcpu-4")
+            self.assertEqual(instances[0].provisioning_model, "SPOT")
+
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(seen_urls[0]).query)
+            self.assertEqual(qs.get("returnPartialSuccess"), ["true"])
+            self.assertIn("items/*/instances(", qs["fields"][0])
+            self.assertIn("scheduling/provisioningModel", qs["fields"][0])
+
+            tok_file = cache_dir / ".gcp_adc_token.json"
+            self.assertTrue(tok_file.exists())
+            self.assertEqual(tok_file.stat().st_mode & 0o777, 0o600)
+            tok_data = json.loads(tok_file.read_text(encoding="utf-8"))
+            self.assertEqual(tok_data["access_token"], "ya29.real_token_2")  # NOT redacted to ya29.***
+
+    async def test_colab_get_usage_isolation_preserves_online_and_cached_cu(self) -> None:
+        class UsageGateway(ColabCliGateway):
+            def __init__(self) -> None:
+                super().__init__(colab_bin="/usr/bin/true")
+                self.fail_usage = False
+
+            def is_configured(self) -> bool:
+                return True
+
+            async def list_sessions(self) -> tuple[dict[str, object], ...]:
+                return ({"name": "w1", "endpoint": "https://x", "hardware": "L4"},)
+
+            async def get_usage(self) -> dict[str, object]:
+                if self.fail_usage:
+                    raise TimeoutError("colab usage timed out")
+                return {"balance_cu": 321.5, "usage_rate": "1.95/hr"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            gw = UsageGateway()
+            probe = CloudProbe(
+                FakeDriveGateway(status_payload={"status": "ONLINE", "idle_seconds": 100, "updated_at": "2026-11-26T08:00:00Z"}),
+                colab_gateway=gw,
+                colab_usage_ttl_sec=0.0,
+                backoff_path=Path(tmp) / "cloud_backoff.json",
+                cache_dir=Path(tmp),
+            )
+
+            async def no_gce() -> tuple[tuple[GceInstanceInfo, ...], None]:
+                return (), None
+
+            probe._fetch_gce_instances = no_gce  # type: ignore[method-assign]
+            t0 = datetime(2026, 11, 26, 8, 1, 0, tzinfo=timezone.utc)
+            snap1 = await probe.collect(now_utc=t0)
+            self.assertEqual(snap1.colab_state, "ONLINE")
+            self.assertAlmostEqual(snap1.colab_balance_cu or 0.0, 321.5)
+            self.assertEqual(snap1.colab_usage_rate, "1.95/hr")
+            self.assertIsNone(snap1.error)
+
+            # Failing get_usage must NOT degrade ONLINE or wipe cached CU or pollute snap.error
+            gw.fail_usage = True
+            snap2 = await probe.collect(now_utc=t0)
+            self.assertEqual(snap2.colab_state, "ONLINE")
+            self.assertAlmostEqual(snap2.colab_balance_cu or 0.0, 321.5)
+            self.assertIsNone(snap2.error)
+
 
 if __name__ == "__main__":
     unittest.main()

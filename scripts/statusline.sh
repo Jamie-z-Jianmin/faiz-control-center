@@ -15,7 +15,16 @@ SPEED_CACHE=""
 CONFIG_FILE="${FAIZ_STATUSLINE_CONFIG:-$HOME/.agents/statusline_config.json}"
 DASH_BIN="${FAIZ_DASH_BIN:-$HOME/.local/bin/faiz-dash}"
 JQ_BIN="/usr/bin/jq"
-[ -x "$JQ_BIN" ] || JQ_BIN="$(command -v jq || true)"
+[ -x "$JQ_BIN" ] || JQ_BIN="$(command -v jq 2>/dev/null || true)"
+if [ -z "$JQ_BIN" ] || [ ! -x "$JQ_BIN" ]; then
+    for _jq_cand in /opt/homebrew/bin/jq /usr/local/bin/jq; do
+        if [ -x "$_jq_cand" ]; then
+            JQ_BIN="$_jq_cand"
+            break
+        fi
+    done
+fi
+[ -n "$JQ_BIN" ] && [ -x "$JQ_BIN" ] || exit 0
 
 case "${OSTYPE:-}" in
     darwin*)
@@ -194,8 +203,26 @@ fi
 if [ -n "$t_path" ] && [ -s "$t_path" ] && [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ] && [ "$t_mtime" -gt "$s_mtime" ]; then
     (
         latest_done=$(tail -n 1 "$t_path" 2>/dev/null | "$JQ_BIN" -c --argjson tmt "$t_mtime" --arg tp "$t_path" '
-          select(.type == "PLANNER_RESPONSE" and .status == "DONE" and (.output_tokens // 0) > 0 and (.created_at // "" | length >= 19)) |
-          (.created_at[0:19] + "Z" | fromdateiso8601? // null) as $ts |
+          def iso_epoch:
+            if type != "string" then null
+            else
+              (try capture("^(?<base>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.[0-9]+)?(?<tz>Z|[+-][0-9]{2}:[0-9]{2})?$") catch null) as $m |
+              if $m == null then null
+              else
+                (($m.base + "Z") | fromdateiso8601? // null) as $base_ep |
+                if $base_ep == null then null
+                elif ($m.tz == null or $m.tz == "" or $m.tz == "Z") then $base_ep
+                else
+                  ($m.tz[0:1]) as $sgn |
+                  ((($m.tz[1:2] | tonumber) * 10) + ($m.tz[2:3] | tonumber)) as $hh |
+                  ((($m.tz[4:5] | tonumber) * 10) + ($m.tz[5:6] | tonumber)) as $mm |
+                  (($hh * 3600) + ($mm * 60)) as $off |
+                  if $sgn == "+" then ($base_ep - $off) else ($base_ep + $off) end
+                end
+              end
+            end;
+          select(.type == "PLANNER_RESPONSE" and .status == "DONE" and (.output_tokens // 0) > 0) |
+          (.created_at | iso_epoch) as $ts |
           select($ts != null) | ($tmt - $ts) as $dt |
           select($dt >= 1 and $dt <= 180) |
           {t_path: $tp, step_index: (.step_index // 0), tps: ((.output_tokens / $dt) | round)}
@@ -233,7 +260,23 @@ if [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ] && [ -x "$DASH_BIN" ]; then
             need_pty=1
         fi
     fi
-    [ "$c_age" -gt 90 ] && [ "$c_last" -gt 90 ] && need_cloud=1
+    cloud_cooldown=300
+    if [ -s "$CLOUD_CACHE" ]; then
+        c_raw=$(< "$CLOUD_CACHE")
+        _re_gce='"gce_running_count"[[:space:]]*:[[:space:]]*[1-9]'
+        _re_clb='"colab_state"[[:space:]]*:[[:space:]]*"ONLINE"'
+        _re_mt='"mailbox_tasks_count"[[:space:]]*:[[:space:]]*[1-9]'
+        _re_deg='"colab_state"[[:space:]]*:[[:space:]]*"DEGRADED"'
+        _re_rl='"cloud_error_kind"[[:space:]]*:[[:space:]]*"rate_limit"'
+        if [[ "$c_raw" =~ $_re_gce ]] || [[ "$c_raw" =~ $_re_clb ]] || [[ "$c_raw" =~ $_re_mt ]]; then
+            cloud_cooldown=30
+        elif [[ "$c_raw" =~ $_re_deg ]] && ! [[ "$c_raw" =~ $_re_rl ]]; then
+            cloud_cooldown=90
+        fi
+    else
+        cloud_cooldown=30
+    fi
+    [ "$c_age" -gt "$cloud_cooldown" ] && [ "$c_last" -gt "$cloud_cooldown" ] && need_cloud=1
     if [ "$need_cloud" -eq 1 ] \
         && [ ! -d "$HOME/.config/colab-cli" ] \
         && [ ! -e "$HOME/.gemini/antigravity-cli/bin/gdrive" ] \
@@ -286,7 +329,7 @@ if [ -n "$t_path" ] && [ -s "$t_path" ] && [ "$t_sz" -gt 0 ] 2>/dev/null; then
     sb_off="${sb_off:-0}"
     sb_tok="${sb_tok:-0}"
     if [ "$t_sz" -gt "$sb_off" ]; then
-        delta_res=$(tail -c +"$((sb_off + 1))" "$t_path" 2>/dev/null | "$JQ_BIN" -Rrs '
+        delta_res=$(tail -c +"$((sb_off + 1))" "$t_path" 2>/dev/null | head -c "$((t_sz - sb_off))" | "$JQ_BIN" -Rrs '
           endswith("\n") as $full
           | (if $full then . else ((rindex("\n")) as $idx | if $idx == null then "" else .[0:($idx + 1)] end) end) as $body
           | ($body | split("\n") | map(select(length > 0) | (try (fromjson | select(.type == "PLANNER_RESPONSE") | ((.input_tokens // 0) + (.output_tokens // 0))) catch 0)) | add // 0) as $add
@@ -309,55 +352,70 @@ if [ -n "$t_path" ] && [ -s "$t_path" ] && [ "$t_sz" -gt 0 ] 2>/dev/null; then
     sess_tok="$sb_tok"
 fi
 
-jq_args=(-rn --argjson in "$stdin_payload" --argjson u_mt "$u_mt" --argjson c_mt "$c_mt" --argjson term_cols "$term_cols" --argjson has_tc "$has_tc" --argjson t_mtime "$t_mtime" --argjson sess_tok "$sess_tok" --arg t_path "$t_path")
+jq_args=(-rn --arg in_raw "$stdin_payload" --argjson u_mt "$u_mt" --argjson c_mt "$c_mt" --argjson term_cols "$term_cols" --argjson has_tc "$has_tc" --argjson t_mtime "$t_mtime" --argjson sess_tok "$sess_tok" --arg t_path "$t_path")
+is_gcp_mode="false"
+[ "${AGY_ADC_AUTH:-0}" = "1" ] && is_gcp_mode="true"
+jq_args+=(--argjson is_gcp_mode "$is_gcp_mode" --arg gcp_env_proj "${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-${ANTHROPIC_VERTEX_PROJECT_ID:-}}}")
+jq_args+=(--argjson gcp_tpm_warn "${FAIZ_GCP_TPM_WARN:-250000}" --argjson gcp_tpm_alert "${FAIZ_GCP_TPM_ALERT:-500000}" --argjson gcp_rpm_warn "${FAIZ_GCP_RPM_WARN:-12}" --argjson gcp_rpm_alert "${FAIZ_GCP_RPM_ALERT:-20}")
 if [ -s "$USAGE_CACHE" ]; then
-    jq_args+=(--slurpfile u "$USAGE_CACHE")
+    jq_args+=(--rawfile u_raw "$USAGE_CACHE")
 else
-    jq_args+=(--argjson u '[]')
+    jq_args+=(--arg u_raw "")
 fi
 if [ -s "$CLOUD_CACHE" ]; then
-    jq_args+=(--slurpfile c "$CLOUD_CACHE")
+    jq_args+=(--rawfile c_raw "$CLOUD_CACHE")
 else
-    jq_args+=(--argjson c '[]')
+    jq_args+=(--arg c_raw "")
 fi
 if [ -n "$SPEED_CACHE" ] && [ -s "$SPEED_CACHE" ]; then
-    jq_args+=(--slurpfile spd "$SPEED_CACHE")
+    jq_args+=(--rawfile spd_raw "$SPEED_CACHE")
 else
-    jq_args+=(--argjson spd '[]')
+    jq_args+=(--arg spd_raw "")
 fi
 cfg_raw=""
 if [ -s "$CONFIG_FILE" ]; then
     cfg_raw=$(< "$CONFIG_FILE")
-    jq_args+=(--slurpfile cfg "$CONFIG_FILE")
+    jq_args+=(--rawfile cfg_raw "$CONFIG_FILE")
 else
-    jq_args+=(--argjson cfg '[]')
+    jq_args+=(--arg cfg_raw "")
 fi
 
-case "$cfg_raw" in
-    *'"nord"'*)
+cfg_theme=""
+_re_theme='"theme"[[:space:]]*:[[:space:]]*"([^"]*)"'
+if [[ "$cfg_raw" =~ $_re_theme ]]; then
+    cfg_theme="${BASH_REMATCH[1]}"
+fi
+case "$cfg_theme" in
+    nord)
         p_tbl='{"glass_bg":"46;52;64","glass_lbl":"152;163;184","glass_val":"236;239;244","base_bg":"59;66;82","base_fg":"229;233;240","base_acc":"136;192;208","ctx_bg":"46;64;87","ctx_fg":"236;239;244","ctx_acc":"136;192;208","ok_bg":"46;74;60","ok_fg":"236;239;244","ok_acc":"163;190;140","warn_bg":"78;62;38","warn_fg":"242;212;152","warn_acc":"235;203;139","alert_bg":"84;42;52","alert_fg":"248;220;224","alert_acc":"191;97;106","muted_bg":"49;55;68","muted_fg":"165;175;194","muted_acc":"140;152;174"}' ;;
-    *'"tokyo_night"'*)
+    tokyo_night)
         p_tbl='{"glass_bg":"36;40;59","glass_lbl":"136;148;186","glass_val":"205;214;248","base_bg":"41;46;66","base_fg":"205;214;248","base_acc":"122;162;247","ctx_bg":"38;61;92","ctx_fg":"205;214;248","ctx_acc":"125;207;255","ok_bg":"36;66;55","ok_fg":"205;214;248","ok_acc":"158;206;106","warn_bg":"74;58;32","warn_fg":"236;188;118","warn_acc":"224;175;104","alert_bg":"82;38;52","alert_fg":"255;212;222","alert_acc":"247;118;142","muted_bg":"38;43;61","muted_fg":"146;158;194","muted_acc":"110;122;158"}' ;;
-    *'"catppuccin"'*)
+    catppuccin)
         p_tbl='{"glass_bg":"49;50;68","glass_lbl":"166;173;200","glass_val":"205;214;244","base_bg":"62;64;86","base_fg":"217;226;252","base_acc":"137;180;250","ctx_bg":"42;68;86","ctx_fg":"217;226;252","ctx_acc":"137;220;235","ok_bg":"42;74;56","ok_fg":"217;226;252","ok_acc":"166;227;161","warn_bg":"80;66;38","warn_fg":"252;232;186","warn_acc":"249;226;175","alert_bg":"86;40;56","alert_fg":"252;220;230","alert_acc":"243;139;168","muted_bg":"50;52;70","muted_fg":"166;173;200","muted_acc":"147;153;178"}' ;;
-    *'"custom"'*)
+    custom)
         p_tbl='null' ;;
     *)
         p_tbl='{"glass_bg":"48;51;58","glass_lbl":"172;180;194","glass_val":"238;240;244","ghost_brd":"107;114;128","base_bg":"60;64;67","base_fg":"232;234;237","base_acc":"138;180;248","base_gbg":"48;51;58","base_glbl":"172;180;194","base_gval":"238;240;244","ctx_bg":"23;78;166","ctx_fg":"248;249;250","ctx_acc":"138;180;248","ctx_gbg":"35;45;64","ctx_glbl":"156;172;198","ctx_gval":"238;243;252","ok_bg":"13;101;45","ok_fg":"248;249;250","ok_acc":"129;201;149","ok_gbg":"27;52;38","ok_glbl":"162;204;178","ok_gval":"234;248;239","warn_bg":"251;188;4","warn_fg":"32;33;36","warn_acc":"250;204;107","warn_gbg":"60;50;26","warn_glbl":"214;196;150","warn_gval":"252;218;140","alert_bg":"165;14;14","alert_fg":"248;249;250","alert_acc":"242;139;130","alert_gbg":"64;30;31","alert_glbl":"218;174;174","alert_gval":"250;228;226","muted_bg":"52;56;62","muted_fg":"189;193;198","muted_acc":"154;160;166","muted_gbg":"42;45;52","muted_glbl":"158;164;174","muted_gval":"218;222;228"}' ;;
 esac
 jq_args+=(--argjson p_tbl "$p_tbl")
 
-case "$cfg_raw" in
-    *'"zh"'*)
-        JQ_DISP_LEN='def disp_len: if (test("[\u2e80-\u9fff\uac00-\ud7af\uf900-\uffff]") | not) then length else explode | reduce .[] as $cp (0; . + (if ($cp >= 11904 and $cp <= 40959) or ($cp >= 4352 and $cp <= 4447) or ($cp >= 44032 and $cp <= 55203) or ($cp >= 63744 and $cp <= 65500) then 2 else 1 end)) end;'
-        lang_tbl='{"ctx":"上下文 ","c":"缓","sync":"配额同步中","context":"上下文 ","cold":" 冷却","cache":"缓存 ","live_tag":" · 实时","speed":"速率 ","warn_pro_c":" (Pro低)","warn_pro_2":" (Pro低)","warn_pro":" (Pro低)","thro_c":" (限)","thro_2":" (限)","thro":" (限)","session":"本话 ","burn":"消耗 ","full":"满额","soon":"重刷中","reset":"重置 ","sess":"会话 ","online":"在线","mleft_p":" · 余","mleft_s":"分","on":"在线","idle":"停机","stale":"失联!","lim_rate":"限流 · Rate","lim":"限流","to_net":"超时 · Net","to":"超时","gce_s":"台","queue":"队列 ","run":"运行","fail":"失败","r_s":"运","f_s":"败","q_idle":"空闲","done":"完成","m_unit":"分","unv":"未核","q_tag":"待·","f_tag":"败","nocache":"无缓存","rclimit":"rc限流","degraded":"云降级","live":"实时","ago":"前"}' ;;
-    *)
-        JQ_DISP_LEN='def disp_len: length;'
-        lang_tbl='{"ctx":"Ctx ","c":"C","sync":"Quota syncing","context":"Context ","cold":" cold","cache":"Cache ","live_tag":" · Live","speed":"Speed ","warn_pro_c":"!","warn_pro_2":" Pro!","warn_pro":" (Pro!)","thro_c":"!","thro_2":" Low","thro":" (Low)","session":"Session ","burn":"Burn ","full":"Full","soon":"Soon","reset":"Reset ","sess":"Sess ","online":"ONLINE","mleft_p":" · ","mleft_s":"m left","on":"ON","idle":"IDLE","stale":"STALE!","lim_rate":"LIMIT · Rate","lim":"LIMIT","to_net":"TIMEOUT · Net","to":"TIMEOUT","gce_s":"","queue":"Queue ","run":" Run","fail":" Fail","r_s":"R","f_s":"F","q_idle":"Idle","done":" Done","m_unit":"m","unv":"UNV","q_tag":"Q·","f_tag":"F","nocache":"no-cache","rclimit":"rc-limit","degraded":"degraded","live":"live","ago":" ago"}' ;;
-esac
+_re_lang_zh='"language"[[:space:]]*:[[:space:]]*"zh"'
+if [[ "$cfg_raw" =~ $_re_lang_zh ]]; then
+    JQ_DISP_LEN='def disp_len: if (test("[\u2e80-\u9fff\uac00-\ud7af\uf900-\uffff]") | not) then length else explode | reduce .[] as $cp (0; . + (if ($cp >= 11904 and $cp <= 40959) or ($cp >= 4352 and $cp <= 4447) or ($cp >= 44032 and $cp <= 55203) or ($cp >= 63744 and $cp <= 65500) then 2 else 1 end)) end;'
+    lang_tbl='{"ctx":"上下文 ","c":"缓","sync":"配额同步中","context":"上下文 ","cold":" 冷却","cache":"缓存 ","live_tag":" · 实时","speed":"速率 ","warn_pro_c":" (Pro低)","warn_pro_2":" (Pro低)","warn_pro":" (Pro低)","session":"本话 ","burn":"消耗 ","full":"满额","soon":"重刷中","reset":"重置 ","sess":"会话 ","online":"在线","mleft_p":" · 余","mleft_s":"分","on":"在线","idle":"停机","stale":"失联!","lim_rate":"限流 · Rate","lim":"限流","to_net":"超时 · Net","to":"超时","gce_s":"台","queue":"队列 ","run":"运行","fail":"失败","r_s":"运","f_s":"败","q_idle":"空闲","done":"完成","m_unit":"分","unv":"未核","q_tag":"待·","f_tag":"败","nocache":"无缓存","rclimit":"rc限流","degraded":"云降级","live":"实时","ago":"前"}'
+else
+    JQ_DISP_LEN='def disp_len: length;'
+    lang_tbl='{"ctx":"Ctx ","c":"C","sync":"Quota syncing","context":"Context ","cold":" cold","cache":"Cache ","live_tag":" · Live","speed":"Speed ","warn_pro_c":"!","warn_pro_2":" Pro!","warn_pro":" (Pro!)","session":"Session ","burn":"Burn ","full":"Full","soon":"Soon","reset":"Reset ","sess":"Sess ","online":"ONLINE","mleft_p":" · ","mleft_s":"m left","on":"ON","idle":"IDLE","stale":"STALE!","lim_rate":"LIMIT · Rate","lim":"LIMIT","to_net":"TIMEOUT · Net","to":"TIMEOUT","gce_s":"","queue":"Queue ","run":" Run","fail":" Fail","r_s":"R","f_s":"F","q_idle":"Idle","done":" Done","m_unit":"m","unv":"UNV","q_tag":"Q·","f_tag":"F","nocache":"no-cache","rclimit":"rc-limit","degraded":"degraded","live":"live","ago":" ago"}'
+fi
 jq_args+=(--argjson L "$lang_tbl")
 
-if [ "$has_tc" = "false" ] || [[ "$cfg_raw" == *'"custom"'* ]] || [[ "$cfg_raw" == *'"minimal"'* ]]; then
+cfg_style=""
+_re_style='"style"[[:space:]]*:[[:space:]]*"([^"]*)"'
+if [[ "$cfg_raw" =~ $_re_style ]]; then
+    cfg_style="${BASH_REMATCH[1]}"
+fi
+
+if [ "$has_tc" = "false" ] || [ "$cfg_theme" = "custom" ] || [ "$cfg_style" = "minimal" ]; then
     JQ_COL_HELPERS='
   def ansi16($name):
     ({
@@ -394,7 +452,7 @@ else
   def theme_palette($t; $custom_cols): $p_tbl;'
 fi
 
-if [ "$has_tc" = "true" ] && [[ "$cfg_raw" != *'"ghost"'* ]] && [[ "$cfg_raw" != *'"powerline"'* ]] && [[ "$cfg_raw" != *'"pill"'* ]] && [[ "$cfg_raw" != *'"minimal"'* ]]; then
+if [ "$has_tc" = "true" ] && [ "$cfg_style" != "ghost" ] && [ "$cfg_style" != "powerline" ] && [ "$cfg_style" != "pill" ] && [ "$cfg_style" != "minimal" ]; then
     JQ_RENDER_CAP='
   def render_capsule($it; $sp; $acc_sp; $pal; $style; $tc; $tint_val):
     repeat_str(" "; ($it.pad // 0)) as $pad_str |
@@ -449,10 +507,11 @@ else
     end;'
 fi
 
-if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[[:space:]]*:[[:space:]]*[1-9] ]]; then
+_re_maxw='"max_width"[[:space:]]*:[[:space:]]*[1-9]'
+if [ "${term_cols:-90}" -lt 157 ] 2>/dev/null || [[ "$cfg_raw" =~ $_re_maxw ]]; then
     JQ_MATRIX_PACK='
   def pair_quota_col4($items):
-    if ($items | length) == 8 and ($items[3].cap_id == "gemini") and ($items[4].cap_id == "claude" or $items[4].cap_id == "argon") then
+    if ($items | length) == 8 and ($items[3].cap_id == "gemini") and ($items[4].cap_id == "claude" or $items[4].cap_id == "gcp") then
       [$items[0], $items[1], $items[2], $items[3], $items[5], $items[6], $items[7], $items[4]]
     else $items end;
 
@@ -485,13 +544,29 @@ if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[
             else . end
           ]
         )
+      elif .cap_id == "gcp" then
+        .parts |= (
+          [
+            range(0; length) as $pi |
+            .[$pi] |
+            if ($lvl >= 2) and ($pi == 0) and (.r == "lbl") and (.t == "GCP ") then
+              .t = "G "
+            else . end
+          ]
+        )
       elif $lvl >= 2 then
         if .cap_id == "cache" and ((.parts | length) > 0) and (.parts[0].r == "lbl") then
           .parts[0].t = "C"
         elif .cap_id == "sessions" and ((.parts | length) > 1) and (.parts[0].r == "lbl") then
           .parts |= .[1:]
-        elif .cap_id == "colab" and ((.parts | length) > 0) and (.parts[0].r == "lbl") and (.parts[0].t == "Colab ") then
-          .parts[0].t = "Clb "
+        elif .cap_id == "colab" then
+          .parts |= [
+            .[] |
+            if (.r == "lbl") and (.t == "Colab ") then .t = "Clb "
+            elif (.r == "acc") and (.t | startswith(" · GCE:")) then
+              (.t | sub("^ · GCE:"; " · G") | if $lvl >= 3 then sub("·Spot"; "") else . end) as $nt | .t = $nt
+            else . end
+          ]
         elif .cap_id == "mailbox" and ((.parts | length) > 0) and (.parts[0].r == "lbl") then
           .parts[0].t = "Q"
         else . end
@@ -527,7 +602,7 @@ if [ "${term_cols:-90}" -lt 120 ] 2>/dev/null || [[ "$cfg_raw" =~ \"max_width\"[
 else
     JQ_MATRIX_PACK='
   def pair_quota_col4($items):
-    if ($items | length) == 8 and ($items[3].cap_id == "gemini") and ($items[4].cap_id == "claude" or $items[4].cap_id == "argon") then
+    if ($items | length) == 8 and ($items[3].cap_id == "gemini") and ($items[4].cap_id == "claude" or $items[4].cap_id == "gcp") then
       [$items[0], $items[1], $items[2], $items[3], $items[5], $items[6], $items[7], $items[4]]
     else $items end;
 
@@ -556,8 +631,8 @@ if [[ "$stdin_payload" == *'"quota"'* ]]; then
     if ($o | type) != "object" then null
     elif ($o.reset_in_seconds | type) == "number" then
       (if $o.reset_in_seconds <= 0 then 0 else ($now + ($o.reset_in_seconds | floor)) end)
-    elif ($o.reset_time | type) == "string" and ($o.reset_time | length) >= 19 then
-      (($o.reset_time[0:19] + "Z") | fromdateiso8601? // null)
+    elif ($o.reset_time | type) == "string" then
+      ($o.reset_time | iso_epoch)
     else null end;'
     JQ_STDIN_QUOTA_VARS='
   ($in.quota // null) as $in_q |
@@ -580,7 +655,7 @@ fi
 
 if [[ "$stdin_payload" == *'"current_usage"'* ]]; then
     JQ_CACHE_HIT='
-  ($in.context_window.current_usage // null) as $cur_u |
+  ((($in.context_window | as_obj).current_usage) // null) as $cur_u |
   (
     if $last_tok != null then (($last_tok.cr / ($last_tok.inp + $last_tok.cr)) * 100)
     elif ($cur_u | type) == "object" then
@@ -595,6 +670,26 @@ fi
 
 JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   def rst: "\u001b[0m";
+  def safe_obj: (try fromjson catch {}) | if type == "object" then . else {} end;
+  def as_obj: if type == "object" then . else {} end;
+  def iso_epoch:
+    if type != "string" then null
+    else
+      (try capture("^(?<base>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.[0-9]+)?(?<tz>Z|[+-][0-9]{2}:[0-9]{2})?$") catch null) as $m |
+      if $m == null then null
+      else
+        (($m.base + "Z") | fromdateiso8601? // null) as $base_ep |
+        if $base_ep == null then null
+        elif ($m.tz == null or $m.tz == "" or $m.tz == "Z") then $base_ep
+        else
+          ($m.tz[0:1]) as $sgn |
+          ((($m.tz[1:2] | tonumber) * 10) + ($m.tz[2:3] | tonumber)) as $hh |
+          ((($m.tz[4:5] | tonumber) * 10) + ($m.tz[5:6] | tonumber)) as $mm |
+          (($hh * 3600) + ($mm * 60)) as $off |
+          if $sgn == "+" then ($base_ep - $off) else ($base_ep + $off) end
+        end
+      end
+    end;
   def fmt1:
     (((. * 10) | round) / 10) as $v |
     ($v | tostring) as $s |
@@ -696,10 +791,11 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
     else null end;
 '"${JQ_MATRIX_PACK}"'
 
-  ($u[0] // {}) as $u |
-  ($c[0] // {}) as $c |
-  ($spd[0] // {}) as $spd |
-  ($cfg[0] // {}) as $raw_cfg |
+  ($in_raw | safe_obj) as $in |
+  ($u_raw | safe_obj) as $u |
+  ($c_raw | safe_obj) as $c |
+  ($spd_raw | safe_obj) as $spd |
+  ($cfg_raw | safe_obj) as $raw_cfg |
 
   ($raw_cfg.language // "en") as $lang |
   ($raw_cfg.style // "capsule") as $req_style |
@@ -709,13 +805,14 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   ($raw_cfg.theme // "google") as $theme |
   ($raw_cfg.color_mode // "row") as $color_mode |
   ($raw_cfg.quota_precision // "exact") as $q_prec |
-  (($raw_cfg.row_colors // ["blue", "blue", "blue", "blue"]) | if length > 0 then . else ["blue", "blue", "blue", "blue"] end) as $row_colors |
-  ($raw_cfg.capsule_colors // {}) as $cap_cols |
+  ($raw_cfg.row_colors | if type == "array" and length > 0 then . else ["blue", "blue", "blue", "blue"] end) as $row_colors |
+  ($raw_cfg.capsule_colors | as_obj) as $cap_cols |
+  ($raw_cfg.cloud | as_obj) as $cfg_cloud |
   (if ($raw_cfg.top_gap == false) then false else true end) as $top_gap |
   (if ($raw_cfg.line_gap == false) then false else true end) as $line_gap |
   (if $has_tc then $req_style else "minimal" end) as $eff_style |
   (if ($raw_cfg.auto_wrap == false) then false else true end) as $auto_wrap |
-  ((if ($raw_cfg.max_width // 0) > 0 then $raw_cfg.max_width else $term_cols end) - 2) as $eff_cols |
+  (($raw_cfg.max_width | if type == "number" and . > 0 then . else $term_cols end) - 2) as $eff_cols |
   ($density == "compact") as $use_compact |
   ($density == "auto") as $use_adaptive_2row |
   ($use_adaptive_2row and ($eff_cols >= 155)) as $wide_rich |
@@ -723,7 +820,7 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   ($use_adaptive_2row and ($eff_cols <= 95)) as $short_pct |
   ($eff_cols < 86) as $tight_quota |
 
-  ($raw_cfg.modules // {}) as $m |
+  ($raw_cfg.modules | as_obj) as $m |
   (if ($m.context == false) then false else true end) as $m_ctx |
   (if ($m.cache == false) then false else true end) as $m_cache |
   (if ($m.speed == false) then false else true end) as $m_speed |
@@ -733,7 +830,7 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   (if ($m.mailbox == false) then false else true end) as $m_mbox |
   (if ($m.freshness == false) then false else true end) as $m_fresh |
 
-  ($raw_cfg.colors // {}) as $col |
+  ($raw_cfg.colors | as_obj) as $col |
   theme_palette($theme; $col) as $pal |
   {
     context: ansi16($col.context // "cyan"),
@@ -744,12 +841,12 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   } as $c16 |
 
   (now | floor) as $now_ts |
-  # Live transcript metrics: cache hit %, TTL idle age, and latest step speed (tok/s)
+  # Live transcript metrics: cache hit %, TTL idle age, latest step speed (tok/s), and 60s GCP TPM/RPM
   ($raw_t_txt | split("\n") | map(select(length > 0) | try fromjson catch empty) | map(select(type == "object") | {
-    idx: (.step_index // 0),
+    idx: (.step_index // null),
     type: (.type // ""),
     status: (.status // ""),
-    ts: ((.created_at // "") | if length >= 19 then (.[0:19] + "Z" | fromdateiso8601? // null) else null end),
+    ts: (.created_at | iso_epoch),
     inp: (.input_tokens // 0),
     cr: (.cache_read_tokens // 0),
     out: (.output_tokens // 0)
@@ -768,19 +865,20 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
         if $nxt.type != "USER_INPUT" and $nxt.ts != null then
           ($nxt.ts - $s.ts) as $dt |
           if $dt >= 1 and $dt <= 300 then (($s.out / $dt) | round) else empty end
-        elif ($spd.t_path // "") == $t_path and ($spd.step_index // -1) == $s.idx and ($spd.tps // 0) > 0 then
+        elif ($spd.t_path // "") == $t_path and ($spd.step_index // -1) == ($s.idx // 0) and ($spd.tps // 0) > 0 then
           $spd.tps
         else empty end
       else
         ($t_mtime - $s.ts) as $dt |
         if $dt >= 1 and $dt <= 180 then (($s.out / $dt) | round)
-        elif ($spd.t_path // "") == $t_path and ($spd.step_index // -1) == $s.idx and ($spd.tps // 0) > 0 then $spd.tps
+        elif ($spd.t_path // "") == $t_path and ($spd.step_index // -1) == ($s.idx // 0) and ($spd.tps // 0) > 0 then $spd.tps
         else empty end
       end
     ] | last // null
   ) as $live_tps |
 
-  ($in.context_window.used_percentage // null) as $ctx |
+  ($in.context_window | as_obj) as $in_cw |
+  ($in_cw.used_percentage // null) as $ctx |
 '"${JQ_STDIN_QUOTA_VARS}"'
   ($u.pro_5h_reset_at_epoch // null) as $u_rst5 |
   ($u.pro_wk_reset_at_epoch // null) as $u_rstwk |
@@ -795,7 +893,6 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   (if $in_cla != null then $in_cla else ($u.claude_wk_pct // null) end) as $cla |
   (if $in_cla5 != null then $in_cla5 else ($u.claude_5h_pct // null) end) as $cla5_raw |
   (if ($cla != null and $cla <= 0) then 0.0 else $cla5_raw end) as $cla5 |
-  ($u.argon_wk_pct // null) as $arg |
   (($cla5 != null and $cla5 < 99.9) or ($cla != null and $cla < 99.9)) as $cla_show |
   ($use_adaptive_2row and ($eff_cols < 100)) as $cla_tight |
   (if $cla_show then
@@ -817,7 +914,6 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   (
     if $has_in_q or $u_5h_exp or $u_wk_exp then
       if ($pro5 != null and $pro5 < 20) or ($prowk != null and $prowk < 20) then "WARN_PRO"
-      elif ($arg != null and $arg < 20) then "THROTTLE_ARGON"
       else "GREEN" end
     elif ($pro5 != null and $pro5 < 20) or ($prowk != null and $prowk < 20) then "WARN_PRO"
     else ($u.quota_gate // "") end
@@ -834,12 +930,65 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   ($c.mailbox_tasks_count // null) as $mt |
   ($c.mailbox_failed_count // null) as $mf |
   ($c.mailbox_unverified_count // 0) as $mu |
-  ($c.mailbox.stale // false) as $m_stale |
+  (($c.mailbox | as_obj).stale // false) as $m_stale |
   ($c.mailbox_done_count // 0) as $md |
   ($u.pty_fetched_epoch // (if $u_mt > 0 then $u_mt else 0 end)) as $pty_ep |
   (if $has_in_q then 0 elif $pty_ep > 0 then ($now_ts - $pty_ep) else 999999 end) as $pty_age |
   (if $c_mt > 0 then ($now_ts - $c_mt) else 999999 end) as $c_age |
   (if ($clb == "NOT_CONFIGURED" or $clb == "") then $pty_age else ([ $pty_age, $c_age ] | max) end) as $max_age |
+  ($c.colab_balance_cu // null) as $clb_cu |
+  (if ($clb_cu | type) == "number" then ((($clb_cu * 10 | round) / 10) | tostring) else "" end) as $clb_cu_txt |
+  ($c.gce_instances | if type == "array" then [ .[] | select(type == "object" and (((.status // "") | ascii_upcase) == "RUNNING" or ((.status // "") | ascii_upcase) == "STAGING")) ] | .[0] // null else null end) as $gce_first |
+  (if $gce_first != null then ($gce_first.created_at | iso_epoch) else null end) as $gce_ep |
+  (if $gce_ep != null and $now_ts >= $gce_ep then ($now_ts - $gce_ep) else null end) as $gce_up_s |
+  (if $gce_up_s == null then "" elif $gce_up_s >= 3600 then "\(($gce_up_s / 3600) | floor)h\(((($gce_up_s % 3600) / 60) | floor) | tostring | if length == 1 then "0" + . else . end)m" else "\(($gce_up_s / 60) | floor)m" end) as $gce_up_txt |
+  ($gce_first != null and ((($gce_first.provisioning_model // "") | ascii_upcase) == "SPOT")) as $gce_spot |
+  (
+    if $is_gcp_mode then
+      (
+        [ $tsteps[] | select(.type == "PLANNER_RESPONSE" and .ts != null and .ts >= ($now_ts - 60)) ] |
+        reduce .[] as $r (
+          {seen: {}, items: []};
+          if $r.idx != null then
+            ($r.idx | tostring) as $k |
+            if .seen[$k] != null then .items[.seen[$k]] = $r
+            else .seen[$k] = (.items | length) | .items += [$r] end
+          else .items += [$r] end
+        ) | .items
+      )
+    else [] end
+  ) as $gcp_win60 |
+  ($gcp_win60 | length) as $gcp_rpm_60 |
+  ([$gcp_win60[] | ((.inp // 0) + (.cr // 0) + (.out // 0))] | add // 0) as $gcp_tpm_60 |
+  (if $gcp_tpm_60 >= 1000000 then "\(($gcp_tpm_60 / 1000000) | fmt1)M" elif $gcp_tpm_60 >= 1000 then "\(($gcp_tpm_60 / 1000) | round)K" else "\($gcp_tpm_60)" end) as $gcp_tpm_txt |
+  ([$gcp_env_proj, ($cfg_cloud.gcp_project // ""), (($u.channels | as_obj).quota_project // "")] | map(select(type == "string" and . != "" and . != "your-gcp-project")) | .[0] // "") as $gcp_proj |
+  (if ($gcp_proj | length) > 14 then "\($gcp_proj[0:13])…" else $gcp_proj end) as $gcp_proj_short |
+  (($cfg_cloud.gcp_tpm_warn | if type == "number" and . > 0 then . else $gcp_tpm_warn end)) as $eff_tpm_warn |
+  (($cfg_cloud.gcp_tpm_alert | if type == "number" and . > 0 then . else $gcp_tpm_alert end)) as $eff_tpm_alert |
+  (($cfg_cloud.gcp_rpm_warn | if type == "number" and . > 0 then . else $gcp_rpm_warn end)) as $eff_rpm_warn |
+  (($cfg_cloud.gcp_rpm_alert | if type == "number" and . > 0 then . else $gcp_rpm_alert end)) as $eff_rpm_alert |
+  (
+    if ($gcp_tpm_60 >= $eff_tpm_alert) or ($gcp_rpm_60 >= $eff_rpm_alert) then ["▲", "alert", true]
+    elif ($gcp_tpm_60 >= $eff_tpm_warn) or ($gcp_rpm_60 >= $eff_rpm_warn) then ["▲", "warn", true]
+    else ["●", "base", false] end
+  ) as $gcp_meta |
+  {
+    cap_id: "gcp",
+    icon: $gcp_meta[0],
+    parts: (
+      if $wide_rich and $gcp_proj_short != "" then
+        [{t: "GCP ", r: "lbl"}, {t: "\($gcp_proj_short) · ", r: "lbl"}, {t: "\($gcp_tpm_txt) TPM · \($gcp_rpm_60) RPM", r: (if $gcp_meta[2] then "acc" else "val" end)}]
+      elif $wide_rich then
+        [{t: "GCP ", r: "lbl"}, {t: "\($gcp_tpm_txt) TPM · \($gcp_rpm_60) RPM", r: (if $gcp_meta[2] then "acc" else "val" end)}]
+      elif $narrow_4x2 then
+        [{t: "GCP ", r: "lbl"}, {t: "\($gcp_tpm_txt)·\($gcp_rpm_60)", r: (if $gcp_meta[2] then "acc" else "val" end)}]
+      else
+        [{t: "GCP ", r: "lbl"}, {t: "\($gcp_tpm_txt) · \($gcp_rpm_60)r", r: (if $gcp_meta[2] then "acc" else "val" end)}]
+      end
+    ),
+    slot: $gcp_meta[1],
+    tint: $gcp_meta[2]
+  } as $gcp_pill |
 
 '
 
@@ -877,22 +1026,28 @@ JQ_COMPACT='
     ) |
     (
       if $m_quota then
-        if $pro5 != null or $prowk != null or $arg != null or $cla5 != null or $cla != null then
+        if $pro5 != null or $prowk != null or $cla5 != null or $cla != null then
           (
             [{t: "Gem ", r: "lbl"}, {t: "\(if $pro5 != null then quota_str($pro5; $q_prec; $tight_quota) else "--" end)/\(if $prowk != null then quota_str($prowk; $q_prec; $tight_quota) else "--" end)%", r: "val"}] +
-            (if $arg != null then
-              [{t: "·", r: "lbl"}, {t: (if ($arg < 20 or $gate == "THROTTLE_ARGON") then "▲" else "Arg " end), r: (if ($arg < 20 or $gate == "THROTTLE_ARGON") then "acc" else "lbl" end)}, {t: "\(quota_str($arg; $q_prec; $tight_quota))%\(if $gate == "WARN_PRO" or $gate == "THROTTLE_ARGON" then "!" else "" end)", r: "val"}]
-             else
-              (if $gate == "WARN_PRO" then [{t: $L.warn_pro_c, r: "acc"}] else [] end) +
-              (if $cla_show then
-                [{t: "·", r: "lbl"}, {t: (if ($cla_min != null and $cla_min < 20) then "▲" else "Cla " end), r: (if ($cla_min != null and $cla_min < 20) then "acc" else "lbl" end)}, {t: $cla_val, r: "val"}]
-               else [] end)
-             end)
+            (if $gate == "WARN_PRO" then [{t: $L.warn_pro_c, r: "acc"}] else [] end) +
+            (if $is_gcp_mode then
+              [{t: "·", r: "lbl"}, {t: (if $gcp_meta[2] then "▲" else "GCP " end), r: (if $gcp_meta[2] then "acc" else "lbl" end)}, {t: "\($gcp_tpm_txt)·\($gcp_rpm_60)r", r: (if $gcp_meta[2] then "acc" else "val" end)}]
+             elif $cla_show then
+              [{t: "·", r: "lbl"}, {t: (if ($cla_min != null and $cla_min < 20) then "▲" else "Cla " end), r: (if ($cla_min != null and $cla_min < 20) then "acc" else "lbl" end)}, {t: $cla_val, r: "val"}]
+             else [] end)
           ) as $p2_parts |
-          (if $gate == "WARN_PRO" or ($pro5 != null and $pro5 < 20) or ($arg == null and $cla_show and $cla_min != null and $cla_min < 20) then "alert"
-           elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($pro5 != null and $pro5 < 40) or ($arg == null and $cla_show and $cla_min != null and $cla_min < 40) then "warn"
-           else "base" end) as $q_slot |
+          (if $is_gcp_mode then
+            (if $gate == "WARN_PRO" or ($pro5 != null and $pro5 < 20) or $gcp_meta[1] == "alert" then "alert"
+             elif ($pro5 != null and $pro5 < 40) or $gcp_meta[1] == "warn" then "warn"
+             else "base" end)
+           else
+            (if $gate == "WARN_PRO" or ($pro5 != null and $pro5 < 20) or ($cla_show and $cla_min != null and $cla_min < 20) then "alert"
+             elif ($pro5 != null and $pro5 < 40) or ($cla_show and $cla_min != null and $cla_min < 40) then "warn"
+             else "base" end)
+           end) as $q_slot |
           . + [{cap_id: "gemini", icon: (if $ind == "ring" and $pro5 != null then ring($pro5) else "" end), parts: $p2_parts, slot: $q_slot, tint: ($q_slot != "base")}]
+        elif $is_gcp_mode then
+          . + [{cap_id: "gemini", icon: $gcp_meta[0], parts: [{t: $L.sync, r: "lbl"}, {t: "·GCP ", r: "lbl"}, {t: "\($gcp_tpm_txt)·\($gcp_rpm_60)r", r: (if $gcp_meta[2] then "acc" else "val" end)}], slot: (if $gcp_meta[2] then $gcp_meta[1] else "muted" end), tint: $gcp_meta[2]}]
         else
           . + [{cap_id: "gemini", icon: "○", parts: [{t: $L.sync, r: "lbl"}], slot: "muted", tint: false}]
         end
@@ -902,12 +1057,12 @@ JQ_COMPACT='
       (if $m_sess and ($pc != null) then [{t: "\($pc)·\($gc // 0)", r: "val"}] else [] end) +
       (if $m_colab and ($clb != "") and ($clb != "NOT_CONFIGURED") then
         (if ($m_sess and ($pc != null)) then [{t: "·", r: "lbl"}] else [] end) +
-        (if $clb == "ONLINE" then [{t: "Colab ", r: "lbl"}, {t: (if $idle != null then "\(($idle / 60) | floor)m" else "ON" end), r: "val"}]
+        (if $clb == "ONLINE" then [{t: "Colab ", r: "lbl"}, {t: ((if $idle != null then "\(($idle / 60) | floor)m" else "ON" end) + (if $clb_cu_txt != "" then "·CU\($clb_cu_txt)" else "" end)), r: "val"}]
          elif $clb == "STOPPED" then [{t: "Colab ", r: "lbl"}, {t: "OFF", r: "lbl"}]
          elif $clb == "STALE_OFFLINE" then [{t: "Colab!", r: "acc"}]
          elif $clb == "DEGRADED" then [{t: (if $err_kind == "rate_limit" then "Colab LIM" else "Colab ERR" end), r: "acc"}]
          else [{t: "Colab \($clb)", r: "acc"}] end) +
-        (if ($gce // 0) > 0 then [{t: " G\($gce)", r: "acc"}] else [] end)
+        (if ($gce // 0) > 0 then [{t: " G\($gce)\(if $gce_spot then "·S" else "" end)\(if $gce_up_txt != "" then "(\($gce_up_txt))" else "" end)", r: "acc"}] else [] end)
        else [] end) +
       (if $m_mbox and ($mt != null) and ($clb != "NOT_CONFIGURED") then
         (if (($m_sess and ($pc != null)) or ($m_colab and ($clb != "") and ($clb != "NOT_CONFIGURED"))) then [{t: "·", r: "lbl"}] else [] end) +
@@ -1012,15 +1167,14 @@ JQ_MAIN='
   else . end |
 
   if $m_quota then
-    if $pro5 != null or $prowk != null or $arg != null or $cla5 != null or $cla != null then
+    if $pro5 != null or $prowk != null or $cla5 != null or $cla != null then
       ($use_adaptive_2row and ($eff_cols < 155) and ($q_prec != "int")) as $compact_gem_lbl |
-      (if ($arg != null and $cla_tight and $cla_show and $q_prec != "int") then "1dp" else $q_prec end) as $gem_prec |
       (
         if $compact_gem_lbl then
           (if $pro5 != null then
-            [{t: (if ($narrow_4x2 and ($eff_cols < 50)) then "Gem " else "Gemini " end), r: "lbl"}, {t: "\(quota_str($pro5; $gem_prec; $tight_quota))%", r: "val"}]
+            [{t: (if ($narrow_4x2 and ($eff_cols < 50)) then "Gem " else "Gemini " end), r: "lbl"}, {t: "\(quota_str($pro5; $q_prec; $tight_quota))%", r: "val"}]
            else [{t: (if ($narrow_4x2 and ($eff_cols < 50)) then "Gem " else "Gemini " end), r: "lbl"}, {t: "--", r: "val"}] end) +
-          (if $prowk != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($prowk; $gem_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
+          (if $prowk != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($prowk; $q_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
         else
           (if $wide_rich and ($reset_ep != null) and ($reset_ep > 0) then
             (($reset_ep - $now_ts) as $grem |
@@ -1051,47 +1205,16 @@ JQ_MAIN='
         slot: $g_slot,
         tint: ($g_slot != "base")
       }] |
-      (if $arg != null then
-        (
-          (if ($cla_tight and $cla_show and $q_prec != "int") then
-            [{t: "Arg ", r: "lbl"}, {t: (if $narrow_4x2 then (if $eff_cols < 50 then "\($arg | round)%" else "\($arg | fmt1)%" end) else "\($arg | fmt1)" end), r: "val"}]
-           else
-            [{t: (if ($use_adaptive_2row and $cla_show and ($wide_rich | not)) then "Arg " else "Argon " end), r: "lbl"}, {t: "\(quota_str($arg; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
-            (if $ind == "bar" then [{t: " \(bar6($arg))", r: "acc"}] else [] end)
-           end) +
-          (if $gate == "WARN_PRO" then [{t: (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then $L.warn_pro_c elif $use_adaptive_2row then $L.warn_pro_2 else $L.warn_pro end), r: "acc"}]
-           elif $gate == "THROTTLE_ARGON" then [{t: (if ($compact_gem_lbl or ($use_adaptive_2row and $cla_show)) then $L.thro_c elif $use_adaptive_2row then $L.thro_2 else $L.thro end), r: "acc"}]
-           else [] end) +
-          (if ($use_adaptive_2row and $cla_show) then [{t: (if $wide_rich then " · Claude " else "·Cla " end), r: "lbl"}, {t: $cla_val, r: "val"}] else [] end)
-        ) as $a_parts |
-        (if $gate == "WARN_PRO" or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 20) then "alert"
-         elif ($arg != null and $arg < 20) or ($gate == "THROTTLE_ARGON") or ($use_adaptive_2row and $cla_show and $cla_min != null and $cla_min < 40) then "warn"
-         else "base" end) as $a_slot |
-        . + [{
-          cap_id: "argon",
-          icon: (if $a_slot != "base" then "▲" elif $ind == "ring" and $arg != null then ring($arg) else "" end),
-          parts: $a_parts,
-          slot: $a_slot,
-          tint: ($a_slot != "base")
-        }] |
-        (if ($cla_show and ($use_adaptive_2row | not)) then
-          (if ($cla_min != null and $cla_min < 20) then "alert" elif ($cla_min != null and $cla_min < 40) then "warn" else "base" end) as $cl_slot |
-          . + [{
-            cap_id: "argon",
-            icon: (if $ind == "ring" and $cla_min != null then ring($cla_min) else "" end),
-            parts: [{t: "Claude ", r: "lbl"}, {t: $cla_val, r: "val"}],
-            slot: $cl_slot,
-            tint: ($cl_slot != "base")
-          }]
-         else . end)
+      (if $is_gcp_mode then
+        . + [$gcp_pill]
        elif ($cla5 != null or $cla != null) then
         (if ($narrow_4x2 and ($eff_cols < 50)) then "Cla " else "Claude " end) as $cla_lbl |
         (
           (if $compact_gem_lbl then
             (if $cla5 != null then
-              [{t: $cla_lbl, r: "lbl"}, {t: "\(quota_str($cla5; $gem_prec; $tight_quota))%", r: "val"}]
+              [{t: $cla_lbl, r: "lbl"}, {t: "\(quota_str($cla5; $q_prec; $tight_quota))%", r: "val"}]
              else [{t: $cla_lbl, r: "lbl"}, {t: "--", r: "val"}] end) +
-            (if $cla != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($cla; $gem_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
+            (if $cla != null then [{t: "·", r: "lbl"}, {t: "\(quota_str($cla; $q_prec; $tight_quota))%", r: "val"}] else [{t: "·--", r: "lbl"}] end)
            else
             (if $cla5 != null then
               [{t: "Claude ", r: "lbl"}, {t: "5h:\(quota_str($cla5; $q_prec; ($short_pct and $q_prec == "int")))%", r: "val"}] +
@@ -1119,14 +1242,14 @@ JQ_MAIN='
         parts: [{t: $L.sync, r: "lbl"}],
         slot: "muted",
         tint: false
-      }]
+      }] + (if $is_gcp_mode then [$gcp_pill] else [] end)
     end
   else . end |
 
   if $m_sess then
     (
       if ($sess_tok != null and $sess_tok > 0) then $sess_tok
-      elif $ctx != null then (($in.context_window.total_input_tokens // 0) + ($in.context_window.total_output_tokens // 0))
+      elif $ctx != null then (($in_cw.total_input_tokens // 0) + ($in_cw.total_output_tokens // 0))
       else null end
     ) as $eff_sess_tok |
     if $sec_metric == "burn" and ($eff_sess_tok != null or $tok1h != null) then
@@ -1201,7 +1324,7 @@ JQ_MAIN='
   if $m_colab and ($clb != "") and ($clb != "NOT_CONFIGURED") then
     (
       if $clb == "ONLINE" then
-        ["●", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then ($L.online + (if $idle != null then "\($L.mleft_p)\(($idle / 60) | floor)\($L.mleft_s)" else "" end)) else ($L.on + (if $idle != null then "(\(($idle / 60) | floor)m)" else "" end)) end), r: "val"}], "ok", false]
+        ["●", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then ($L.online + (if $idle != null then "\($L.mleft_p)\(($idle / 60) | floor)\($L.mleft_s)" else "" end) + (if $clb_cu_txt != "" then " · CU:\($clb_cu_txt)" else "" end)) else ($L.on + (if $idle != null then "(\(($idle / 60) | floor)m)" else "" end)) end), r: "val"}], "ok", false]
       elif $clb == "STOPPED" then
         ["○", [{t: "Colab ", r: "lbl"}, {t: $L.idle, r: "lbl"}], "muted", false]
       elif $clb == "STALE_OFFLINE" then
@@ -1216,7 +1339,7 @@ JQ_MAIN='
         ["◐", [{t: "Colab ", r: "lbl"}, {t: $clb, r: "acc"}], "warn", true]
       end
     ) as $cm |
-    (if ($gce // 0) > 0 then [{t: " · GCE:\($gce)\($L.gce_s)", r: "acc"}] else [] end) as $gce_p |
+    (if ($gce // 0) > 0 then [{t: " · GCE:\($gce)\($L.gce_s)\(if $gce_spot then "·Spot" else "" end)\(if $gce_up_txt != "" then "(\($gce_up_txt))" else "" end)", r: "acc"}] else [] end) as $gce_p |
     (if ($gce // 0) > 0 then "alert" else $cm[2] end) as $c_slot |
     . + [{cap_id: "colab", icon: $cm[0], parts: ($cm[1] + $gce_p), slot: $c_slot, tint: ($cm[3] or (($gce // 0) > 0))}]
   else . end |
@@ -1307,8 +1430,7 @@ JQ_TAIL=' |
     (
       [
         $row[] as $it |
-        ($cap_cols[$it.cap_id // ""] // "auto") as $raw_cap_tok |
-        (if ($raw_cap_tok == "auto" or $raw_cap_tok == "") and (($it.cap_id // "") == "claude") then ($cap_cols.argon // "auto") else $raw_cap_tok end) as $cap_tok |
+        ($cap_cols[$it.cap_id // ""] // "auto") as $cap_tok |
         (if ($cap_tok != "auto") and ($cap_tok != "") then row_token_to_slot($cap_tok)
          elif $color_mode == "semantic" then $it.slot
          elif $row_slot != "" then $row_slot
@@ -1345,18 +1467,20 @@ JQ_TAIL=' |
   else $body end
 '
 
-case "$cfg_raw" in
-    *'"compact"'*) JQ_BODY="$JQ_COMPACT" ;;
-    *) JQ_BODY="$JQ_MAIN" ;;
-esac
+_re_compact='"density"[[:space:]]*:[[:space:]]*"compact"'
+if [[ "$cfg_raw" =~ $_re_compact ]]; then
+    JQ_BODY="$JQ_COMPACT"
+else
+    JQ_BODY="$JQ_MAIN"
+fi
 JQ_FILTER="${JQ_FILTER}${JQ_BODY}${JQ_TAIL}"
 unset JQ_COMPACT JQ_MAIN JQ_BODY JQ_TAIL
 
 if [ -n "$t_path" ] && [ -s "$t_path" ]; then
-    if [ "$t_sz" -le 32768 ] 2>/dev/null; then
+    if [ "$t_sz" -gt 0 ] 2>/dev/null && [ "$t_sz" -le 32768 ] 2>/dev/null; then
         exec "$JQ_BIN" "${jq_args[@]}" --rawfile raw_t_txt "$t_path" "$JQ_FILTER"
     else
-        "$JQ_BIN" "${jq_args[@]}" --rawfile raw_t_txt <(tail -n 120 "$t_path" 2>/dev/null) "$JQ_FILTER"
+        "$JQ_BIN" "${jq_args[@]}" --rawfile raw_t_txt <(tail -n 120 "$t_path" 2>/dev/null | tail -c 131072) "$JQ_FILTER"
     fi
 else
     exec "$JQ_BIN" "${jq_args[@]}" --arg raw_t_txt "" "$JQ_FILTER"

@@ -5,17 +5,21 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import re
 import time
 from typing import Any, Optional
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from ..gateways.colab import ColabCliGateway
 from ..gateways.drive import DriveGateway
 from ..gateways.exec_util import resolve_binary, run_exec
-from ..models import ColabGcpSnapshot, GceInstanceInfo
+from ..models import ColabGcpSnapshot, GceInstanceInfo, redact_secrets
 from ..statusline_config import get_cloud_settings
-from ..store import atomic_write_json
+from ..store import DEFAULT_CACHE_DIR, atomic_write_json
 
 DEFAULT_GCLOUD_BIN = resolve_binary(
     "gcloud",
@@ -74,6 +78,34 @@ def parse_colab_timestamp(ts_str: str) -> Optional[datetime]:
     return None
 
 
+def _atomic_write_secret_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write sensitive OAuth token JSON atomically with 0o600 permissions (no secret redaction)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.parent / f".{path.name}.tmp.{os.getpid()}"
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    fd = -1
+    try:
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fd = -1
+            fh.write(encoded)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(str(tmp_path), str(path))
+    except Exception:
+        if fd != -1:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 class CloudProbe:
     """Collects Colab control-plane sessions, Drive status.json, GCE Spot, and Drive quota."""
 
@@ -87,7 +119,10 @@ class CloudProbe:
         colab_status_path: Optional[str] = None,
         semaphore: Optional[asyncio.Semaphore] = None,
         about_ttl_sec: float = 300.0,
+        colab_usage_ttl_sec: float = 90.0,
         backoff_path: Optional[Path] = None,
+        cache_dir: Optional[Path] = None,
+        adc_path: Optional[Path] = None,
     ) -> None:
         cloud_cfg = get_cloud_settings()
         self.drive = drive
@@ -97,11 +132,17 @@ class CloudProbe:
         self.colab_status_path = colab_status_path or cloud_cfg["colab_status_path"]
         self.semaphore = semaphore
         self.about_ttl_sec = about_ttl_sec
+        self.colab_usage_ttl_sec = colab_usage_ttl_sec
         self.backoff_path = backoff_path
+        self.cache_dir = cache_dir or (backoff_path.parent if backoff_path is not None else DEFAULT_CACHE_DIR)
+        self._explicit_adc_path = adc_path
 
         self._last_snapshot: Optional[ColabGcpSnapshot] = None
         self._last_about: dict[str, Optional[int]] = {"used": None, "total": None, "free": None}
         self._last_about_ts: float = 0.0
+        self._last_colab_balance_cu: Optional[float] = None
+        self._last_colab_usage_rate: str = ""
+        self._last_colab_usage_ts: float = 0.0
         self._error_streak: int = 0
         self._next_allowed_epoch: float = 0.0
         self._last_error_kind: str = ""
@@ -180,21 +221,241 @@ class CloudProbe:
             self._last_error = ""
             self._save_backoff()
 
+    def _resolve_adc_path(self) -> Path:
+        if self._explicit_adc_path is not None:
+            return self._explicit_adc_path
+        env_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if env_creds:
+            return Path(env_creds).expanduser()
+        return Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
+
+    def _resolve_gcp_project(self, adc_data: Optional[dict[str, Any]] = None) -> str:
+        proj = (self.gcp_project or "").strip()
+        if proj and proj != "your-gcp-project":
+            return proj
+        for env_key in ("GOOGLE_CLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT"):
+            val = os.environ.get(env_key, "").strip()
+            if val and val != "your-gcp-project":
+                return val
+        if adc_data:
+            qp = str(adc_data.get("quota_project_id") or "").strip()
+            if qp and qp != "your-gcp-project":
+                return qp
+        return ""
+
+    def _read_or_refresh_adc_token(
+        self,
+        *,
+        force_refresh: bool = False,
+    ) -> tuple[Optional[str], str, Optional[str]]:
+        """Return (access_token, quota_project_id, status_or_error).
+
+        status_or_error == "fallback" signals non-authorized_user / missing ADC -> use gcloud CLI.
+        """
+        adc_file = self._resolve_adc_path()
+        if not adc_file.is_file():
+            return None, "", "fallback"
+        try:
+            adc_stat = adc_file.stat()
+            adc_data = json.loads(adc_file.read_text(encoding="utf-8"))
+        except Exception:
+            return None, "", "fallback"
+        if not isinstance(adc_data, dict) or adc_data.get("type") != "authorized_user":
+            return None, "", "fallback"
+
+        client_id = str(adc_data.get("client_id") or "").strip()
+        client_secret = str(adc_data.get("client_secret") or "").strip()
+        refresh_token = str(adc_data.get("refresh_token") or "").strip()
+        quota_proj = str(adc_data.get("quota_project_id") or "").strip()
+        if not (client_id and client_secret and refresh_token):
+            return None, quota_proj, "fallback"
+
+        tok_cache_path = self.cache_dir / ".gcp_adc_token.json"
+        now_ep = time.time()
+        if not force_refresh and tok_cache_path.is_file():
+            try:
+                cached = json.loads(tok_cache_path.read_text(encoding="utf-8"))
+                if (
+                    isinstance(cached, dict)
+                    and cached.get("access_token")
+                    and float(cached.get("expires_at") or 0.0) > now_ep
+                    and cached.get("client_id") == client_id
+                    and float(cached.get("adc_mtime") or 0.0) == adc_stat.st_mtime
+                ):
+                    return str(cached["access_token"]), quota_proj, None
+            except Exception:
+                pass
+
+        body = urllib.parse.urlencode(
+            {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            "https://oauth2.googleapis.com/token",
+            data=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=6.0) as resp:
+                tok_resp = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return None, quota_proj, redact_secrets(f"ADC OAuth HTTP {exc.code}")
+        except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
+            return None, quota_proj, redact_secrets(f"ADC OAuth error: {type(exc).__name__}")
+
+        access_token = str(tok_resp.get("access_token") or "").strip()
+        if not access_token:
+            return None, quota_proj, "ADC OAuth missing access_token"
+        try:
+            expires_in = int(tok_resp.get("expires_in") or 3600)
+        except (TypeError, ValueError):
+            expires_in = 3600
+        ttl = max(60, min(expires_in, 3600) - 300)
+        try:
+            _atomic_write_secret_json(
+                tok_cache_path,
+                {
+                    "access_token": access_token,
+                    "expires_at": int(now_ep + ttl),
+                    "client_id": client_id,
+                    "adc_mtime": adc_stat.st_mtime,
+                },
+            )
+        except OSError:
+            pass
+        return access_token, quota_proj, None
+
+    def _fetch_gce_instances_rest_sync(self) -> tuple[Optional[tuple[GceInstanceInfo, ...]], Optional[str]]:
+        """Query Compute Engine aggregated/instances REST API using cached ADC token."""
+        adc_file = self._resolve_adc_path()
+        adc_data: Optional[dict[str, Any]] = None
+        if adc_file.is_file():
+            try:
+                raw_adc = json.loads(adc_file.read_text(encoding="utf-8"))
+                if isinstance(raw_adc, dict):
+                    adc_data = raw_adc
+            except Exception:
+                adc_data = None
+
+        project = self._resolve_gcp_project(adc_data)
+        if not project:
+            return (), None
+
+        token, quota_proj, tok_err = self._read_or_refresh_adc_token(force_refresh=False)
+        if tok_err == "fallback":
+            return None, "fallback"
+        if tok_err or not token:
+            return None, tok_err or "ADC token unavailable"
+
+        instances: list[GceInstanceInfo] = []
+        page_token = ""
+        retried_401 = False
+        pages = 0
+
+        while pages < 5:
+            pages += 1
+            params: dict[str, str] = {
+                "filter": '(status="RUNNING" OR status="STAGING")',
+                "returnPartialSuccess": "true",
+                "fields": (
+                    "nextPageToken,"
+                    "items/*/instances(name,zone,machineType,creationTimestamp,status,scheduling/provisioningModel)"
+                ),
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            url = (
+                f"https://compute.googleapis.com/compute/v1/projects/"
+                f"{urllib.parse.quote(project, safe='')}/aggregated/instances?"
+                f"{urllib.parse.urlencode(params)}"
+            )
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            if quota_proj:
+                headers["x-goog-user-project"] = quota_proj
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            try:
+                with urllib.request.urlopen(req, timeout=6.0) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if exc.code == 401 and not retried_401:
+                    retried_401 = True
+                    try:
+                        tok_path = self.cache_dir / ".gcp_adc_token.json"
+                        if tok_path.exists():
+                            tok_path.unlink()
+                    except OSError:
+                        pass
+                    token, quota_proj, tok_err = self._read_or_refresh_adc_token(force_refresh=True)
+                    if tok_err or not token:
+                        return None, tok_err or "GCE REST 401 refresh failed"
+                    pages -= 1
+                    continue
+                return None, redact_secrets(f"Compute REST HTTP {exc.code}")
+            except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
+                return None, redact_secrets(f"Compute REST {type(exc).__name__}")
+
+            if not isinstance(payload, dict):
+                break
+            items_map = payload.get("items") or {}
+            if isinstance(items_map, dict):
+                for zone_obj in items_map.values():
+                    if not isinstance(zone_obj, dict):
+                        continue
+                    for item in (zone_obj.get("instances") or ()):
+                        if not isinstance(item, dict):
+                            continue
+                        zone_raw = str(item.get("zone", ""))
+                        mtype_raw = str(item.get("machineType", ""))
+                        sched = item.get("scheduling")
+                        prov = str(sched.get("provisioningModel") or "") if isinstance(sched, dict) else ""
+                        instances.append(
+                            GceInstanceInfo(
+                                name=str(item.get("name", "")),
+                                zone=zone_raw.rsplit("/", 1)[-1],
+                                status=str(item.get("status", "UNKNOWN")),
+                                machine_type=mtype_raw.rsplit("/", 1)[-1],
+                                created_at=str(item.get("creationTimestamp", "")),
+                                provisioning_model=prov,
+                            )
+                        )
+            page_token = str(payload.get("nextPageToken") or "").strip()
+            if not page_token:
+                break
+
+        return tuple(instances), None
+
     async def _fetch_gce_instances(self) -> tuple[tuple[GceInstanceInfo, ...], Optional[str]]:
+        rest_instances, rest_err = await asyncio.to_thread(self._fetch_gce_instances_rest_sync)
+        if rest_instances is not None:
+            return rest_instances, None
+
+        project = self._resolve_gcp_project()
+        if not project:
+            return (), None
+        if not self.gcloud_bin:
+            return (), (None if rest_err == "fallback" else rest_err)
+
         res = await run_exec(
             [
                 self.gcloud_bin,
                 "compute",
                 "instances",
                 "list",
-                f"--project={self.gcp_project}",
+                f"--project={project}",
+                "--filter=status=(RUNNING,STAGING)",
                 "--format=json",
             ],
             semaphore=self.semaphore,
             timeout=12.0,
         )
         if res.timed_out or res.returncode != 0:
-            return (), (res.stderr.strip() or f"gcloud failed ({res.returncode})")
+            err_txt = res.stderr.strip() or f"gcloud failed ({res.returncode})"
+            return (), (f"{rest_err}; {err_txt}" if rest_err and rest_err != "fallback" else err_txt)
         try:
             raw_list = json.loads(res.stdout or "[]")
         except json.JSONDecodeError as exc:
@@ -204,6 +465,8 @@ class CloudProbe:
         for item in raw_list:
             zone_raw = str(item.get("zone", ""))
             mtype_raw = str(item.get("machineType", ""))
+            sched = item.get("scheduling")
+            prov = str(sched.get("provisioningModel") or "") if isinstance(sched, dict) else ""
             instances.append(
                 GceInstanceInfo(
                     name=str(item.get("name", "")),
@@ -211,6 +474,7 @@ class CloudProbe:
                     status=str(item.get("status", "UNKNOWN")),
                     machine_type=mtype_raw.rsplit("/", 1)[-1],
                     created_at=str(item.get("creationTimestamp", "")),
+                    provisioning_model=prov,
                 )
             )
         return tuple(instances), None
@@ -304,6 +568,23 @@ class CloudProbe:
                     idle_remaining = 0
             except Exception as exc:
                 errors.append(f"ColabCLI: {exc}")
+
+            # Best-effort CU balance enrichment (isolated: never degrades ONLINE state or pollutes snap.error)
+            if (
+                force
+                or (mono - self._last_colab_usage_ts >= self.colab_usage_ttl_sec)
+                or self._last_colab_balance_cu is None
+            ):
+                try:
+                    usage_info = await self.colab_gateway.get_usage()
+                    if isinstance(usage_info, dict) and usage_info:
+                        if usage_info.get("balance_cu") is not None:
+                            self._last_colab_balance_cu = float(usage_info["balance_cu"])
+                        if usage_info.get("usage_rate"):
+                            self._last_colab_usage_rate = str(usage_info["usage_rate"])
+                        self._last_colab_usage_ts = mono
+                except Exception:
+                    pass
 
         # 2. GCE Spot instances — never blocked by Drive backoff
         gce_instances, gce_err = await self._fetch_gce_instances()
@@ -411,6 +692,8 @@ class CloudProbe:
                 colab_sessions_count=colab_sessions_count,
                 colab_gpu=colab_gpu,
                 colab_source=colab_source,
+                colab_balance_cu=self._last_colab_balance_cu,
+                colab_usage_rate=self._last_colab_usage_rate,
                 error="; ".join(errors) if errors else None,
                 stale=False,
             )
@@ -440,6 +723,8 @@ class CloudProbe:
                 colab_sessions_count=self._last_snapshot.colab_sessions_count,
                 colab_gpu=self._last_snapshot.colab_gpu,
                 colab_source="drive",
+                colab_balance_cu=self._last_colab_balance_cu,
+                colab_usage_rate=self._last_colab_usage_rate,
                 error="; ".join(errors) if errors else "Colab probe failed",
                 stale=True,
             )
@@ -465,6 +750,8 @@ class CloudProbe:
             colab_sessions_count=colab_sessions_count,
             colab_gpu=colab_gpu,
             colab_source="drive",
+            colab_balance_cu=self._last_colab_balance_cu,
+            colab_usage_rate=self._last_colab_usage_rate,
             error="; ".join(errors) if errors else None,
             stale=not colab_drive_ok,
         )

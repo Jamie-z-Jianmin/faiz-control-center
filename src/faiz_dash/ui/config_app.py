@@ -110,7 +110,8 @@ I18N: dict[str, dict[str, Any]] = {
             "cache": "Cache Pill Color",
             "speed": "Speed Pill Color",
             "gemini": "Gemini Quota Color",
-            "argon": "Claude Quota Color",
+            "claude": "Claude Quota Color",
+            "gcp": "GCP 60s Rate Color",
             "sessions": "Session / Burn Color",
             "colab": "Colab / GCE Color",
             "mailbox": "Queue / Mailbox Color",
@@ -175,7 +176,8 @@ I18N: dict[str, dict[str, Any]] = {
             "cache": "缓存胶囊底色",
             "speed": "速率胶囊底色",
             "gemini": "Gemini 配额底色",
-            "argon": "Claude 配额底色",
+            "claude": "Claude 配额底色",
+            "gcp": "GCP 速率底色",
             "sessions": "消耗 / 会话底色",
             "colab": "Colab / GCE 底色",
             "mailbox": "任务队列底色",
@@ -754,6 +756,7 @@ class StatuslineConfigApp(App[None]):
             tmp_cfg = tf.name
         try:
             env = os.environ.copy()
+            env.pop("AGY_ADC_AUTH", None)
             env["FAIZ_STATUSLINE_NO_BG"] = "1"
             env["FAIZ_STATUSLINE_CONFIG"] = tmp_cfg
             env["FAIZ_TERM_WIDTH"] = str(preview_cols)

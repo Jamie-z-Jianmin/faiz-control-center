@@ -49,47 +49,11 @@ Quota available
 [██████████████████████████████████████████████████] 100.00%
 Quota available
 
-
-GEMINI 4 ARGON
-  For paid Pro plans, Argon quota is separate.
-
-  Gemini 4 Argon Weekly Limit
-[███████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 13.78%
-Refreshes in 164h 41m
-
   │Within each group, models share a weekly limit and a 5-hour limit.
 """
 
 
-SAMPLE_TWO_BUCKET_USAGE_OUTPUT = """
-\x1b[2J\x1b[H└ Models & Quota
-  Account: user@example.com
-
-GEMINI MODELS
-  Models within this group: Gemini 4 Hydrogen, Gemini 3.8 Flash
-
-  Weekly Limit Remaining
-[█████████████████████████████████████████████░░░░░] 90.73%
-Refreshes in 165h 24m
-
-  Five Hour Limit Remaining
-[███████████████████████████████████░░░░░░░░░░░░░░░] 69.09%
-Refreshes in 2h 24m
-
-
-CLAUDE AND GPT MODELS
-  Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B
-
-  Weekly Limit Remaining
-[██████████████████████████████████████████████████] 100.00%
-Quota available
-
-  Five Hour Limit Remaining
-[██████████████████████████████████████████████████] 100.00%
-Quota available
-
-  │Within each group, models share a weekly limit and a 5-hour limit.
-"""
+SAMPLE_TWO_BUCKET_USAGE_OUTPUT = SAMPLE_USAGE_OUTPUT
 
 
 class TestUsageProbe(unittest.TestCase):
@@ -107,10 +71,6 @@ class TestUsageProbe(unittest.TestCase):
         # 2-bucket layout with footer
         self.assertTrue(_is_usage_frame1_complete(SAMPLE_TWO_BUCKET_USAGE_OUTPUT.encode("utf-8"), elapsed=1.5))
 
-        # Legacy 3-bucket layout even without footer
-        legacy_no_footer = SAMPLE_USAGE_OUTPUT.split("Within each group")[0].encode("utf-8")
-        self.assertTrue(_is_usage_frame1_complete(legacy_no_footer, elapsed=1.5))
-
         # 2-bucket fallback without footer: only triggers when elapsed >= 4.0
         two_bucket_no_footer = SAMPLE_TWO_BUCKET_USAGE_OUTPUT.split("Within each group")[0].encode("utf-8")
         self.assertFalse(_is_usage_frame1_complete(two_bucket_no_footer, elapsed=3.9))
@@ -123,13 +83,14 @@ class TestUsageProbe(unittest.TestCase):
         )
         self.assertFalse(_is_usage_frame1_complete(incomplete, elapsed=5.0))
         self.assertFalse(_is_usage_frame1_complete(b"Google AI Pro\n", elapsed=5.0))
+
     def test_parse_usage_text_real_sample(self) -> None:
         parsed = parse_usage_text(SAMPLE_USAGE_OUTPUT)
         self.assertEqual(parsed["account"], "user@example.com")
         buckets = {b["group_name"]: b for b in parsed["buckets"]}
         self.assertIn("GEMINI MODELS", buckets)
         self.assertIn("CLAUDE AND GPT MODELS", buckets)
-        self.assertIn("GEMINI 4 ARGON", buckets)
+        self.assertEqual(len(buckets), 2)
 
         gem = buckets["GEMINI MODELS"]
         self.assertAlmostEqual(gem["weekly_pct"], 90.73)
@@ -142,10 +103,6 @@ class TestUsageProbe(unittest.TestCase):
         self.assertAlmostEqual(cla["weekly_pct"], 100.0)
         self.assertEqual(cla["weekly_refresh"], "Quota available")
         self.assertAlmostEqual(cla["five_hour_pct"], 100.0)
-
-        arg = buckets["GEMINI 4 ARGON"]
-        self.assertAlmostEqual(arg["weekly_pct"], 13.78)
-        self.assertEqual(arg["weekly_refresh"], "Refreshes in 164h 41m")
 
     def test_parse_usage_text_prefers_last_repainted_frame(self) -> None:
         second_frame = (
@@ -178,7 +135,7 @@ class TestUsageProbe(unittest.TestCase):
         self.assertEqual(gem["weekly_refresh"], "Refreshes in 145h 44m")
         self.assertAlmostEqual(gem["five_hour_pct"], 8.23)
         self.assertEqual(gem["five_hour_refresh"], "Refreshes in 3h 14m")
-        self.assertAlmostEqual(buckets["GEMINI 4 ARGON"]["weekly_pct"], 13.78)
+        self.assertAlmostEqual(buckets["CLAUDE AND GPT MODELS"]["weekly_pct"], 100.0)
 
     def test_parse_ps_eww_channels(self) -> None:
         ps_text = "\n".join(
@@ -248,7 +205,7 @@ class TestUsageProbe(unittest.TestCase):
             line2 = json.dumps(
                 {
                     "created_at": ts_recent,
-                    "model": "gemini-4-argon-high",
+                    "model": "gemini-4-neon-high",
                     "input_tokens": 1000,
                     "cache_read_tokens": 200,
                     "output_tokens": 300,
@@ -267,7 +224,7 @@ class TestUsageProbe(unittest.TestCase):
             self.assertEqual(burn2.tokens_24h, 2500)
             self.assertAlmostEqual(burn2.cache_hit_rate, round(1000 / 3000, 4))
             self.assertEqual(burn2.by_model_24h["gemini-4-hydrogen-high"], 1200)
-            self.assertEqual(burn2.by_model_24h["gemini-4-argon-high"], 1300)
+            self.assertEqual(burn2.by_model_24h["gemini-4-neon-high"], 1300)
 
     def test_pty_cooldown_reuses_fresh_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

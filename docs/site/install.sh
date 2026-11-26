@@ -21,8 +21,14 @@ _fail() {
 
 _check_python() {
     local py=""
-    for cand in "${FAIZ_PYTHON:-}" python3.13 python3.12 python3; do
-        [ -n "$cand" ] || continue
+    if [ -n "${FAIZ_PYTHON:-}" ]; then
+        if command -v "${FAIZ_PYTHON}" >/dev/null 2>&1 && "${FAIZ_PYTHON}" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
+            command -v "${FAIZ_PYTHON}"
+            return 0
+        fi
+        return 2
+    fi
+    for cand in python3.13 python3.12 python3; do
         if command -v "$cand" >/dev/null 2>&1; then
             if "$cand" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
                 py="$(command -v "$cand")"
@@ -34,10 +40,18 @@ _check_python() {
     return 1
 }
 
-PY_BIN="$(_check_python || true)"
-[ -n "$PY_BIN" ] || _fail "Python 3.12+ is required on PATH (or set FAIZ_PYTHON)."
+PY_RC=0
+PY_BIN="$(_check_python)" || PY_RC=$?
+if [ "$PY_RC" -eq 2 ]; then
+    _fail "FAIZ_PYTHON='$FAIZ_PYTHON' is missing or older than Python 3.12."
+fi
+HAS_UV=0
+command -v uv >/dev/null 2>&1 && HAS_UV=1
+if [ -z "$PY_BIN" ] && [ "$HAS_UV" -ne 1 ]; then
+    _fail "Python 3.12+ (or uv to auto-provision Python 3.12) is required on PATH (or set FAIZ_PYTHON)."
+fi
 
-command -v jq >/dev/null 2>&1 || [ -x /usr/bin/jq ] || _fail "jq is required (install via 'brew install jq' or apt/dnf)."
+command -v jq >/dev/null 2>&1 || [ -x /usr/bin/jq ] || [ -x /opt/homebrew/bin/jq ] || [ -x /usr/local/bin/jq ] || _fail "jq is required (install via 'brew install jq' or apt/dnf)."
 
 case "$FAIZ_INSTALL_MODE" in
     link|copy) ;;
@@ -46,7 +60,7 @@ esac
 
 if [ "$DRY_RUN" = "1" ]; then
     _log "DRY_RUN=1: no files will be modified."
-    _log "Python: $PY_BIN"
+    _log "Python: ${PY_BIN:-uv-managed (Python 3.12)}"
     _log "Repo: $FAIZ_REPO_URL (branch: $FAIZ_BRANCH)"
     _log "Target directory: $FAIZ_INSTALL_DIR"
     _log "Install mode: --$FAIZ_INSTALL_MODE"
@@ -92,7 +106,7 @@ fi
 VENV_DIR="$FAIZ_INSTALL_DIR/.venv"
 _log "Setting up isolated virtualenv in $VENV_DIR..."
 if command -v uv >/dev/null 2>&1; then
-    uv venv --python "$PY_BIN" "$VENV_DIR"
+    uv venv --python "${PY_BIN:-3.12}" "$VENV_DIR"
     uv pip install --python "$VENV_DIR/bin/python" -e "$FAIZ_INSTALL_DIR"
 else
     "$PY_BIN" -m venv "$VENV_DIR"

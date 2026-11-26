@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -328,10 +329,26 @@ def _render_quota_section(quota: Optional[dict[str, Any]], usage_age: Optional[i
     return lines
 
 
+def _format_instance_uptime(created_at: str, now_ts: float) -> str:
+    raw = (created_at or "").strip()
+    if not raw:
+        return ""
+    try:
+        iso = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        secs = max(0, int(now_ts - dt.astimezone(timezone.utc).timestamp()))
+        return _format_duration(secs)
+    except ValueError:
+        return ""
+
+
 def _render_cloud_section(
     cloud: Optional[dict[str, Any]],
     cloud_age: Optional[int],
     backoff_sec: int,
+    now_epoch: Optional[float] = None,
 ) -> list[str]:
     age_txt = _format_duration(cloud_age) if cloud_age is not None else "missing"
     if not cloud:
@@ -340,15 +357,28 @@ def _render_cloud_section(
             f"- No cached cloud snapshot found (age: `{age_txt}`).",
         ]
 
+    now_ts = time.time() if now_epoch is None else float(now_epoch)
     state = cloud.get("colab_state", "UNKNOWN")
     idle = _format_duration(cloud.get("idle_remaining_seconds"))
     gces = cloud.get("gce_instances") or []
     running = [g for g in gces if str(g.get("status", "")).upper() in {"RUNNING", "STAGING"}]
-    gce_txt = (
-        f"{len(running)} running ({running[0].get('name', '?')})"
-        if running
-        else f"0 running (total {len(gces)})"
-    )
+    if running:
+        desc_list: list[str] = []
+        for g in running[:3]:
+            parts = [str(g.get("name", "?"))]
+            mtype = str(g.get("machine_type") or "").strip()
+            if mtype:
+                parts.append(mtype)
+            prov = str(g.get("provisioning_model") or "").upper()
+            if prov:
+                parts.append("Spot" if prov == "SPOT" else prov)
+            up = _format_instance_uptime(str(g.get("created_at") or ""), now_ts)
+            if up:
+                parts.append(up)
+            desc_list.append(" · ".join(parts))
+        gce_txt = f"{len(running)} running ({'; '.join(desc_list)})"
+    else:
+        gce_txt = f"0 running (total {len(gces)})"
     used_b = _format_bytes(cloud.get("drive_used_bytes"))
     total_b = _format_bytes(cloud.get("drive_total_bytes"))
     free_b = _format_bytes(cloud.get("drive_free_bytes"))
@@ -366,10 +396,13 @@ def _render_cloud_section(
     src_tag = str(cloud.get("colab_source") or "drive")
     gpu_tag = str(cloud.get("colab_gpu") or "").strip()
     gpu_part = f" | GPU: `{gpu_tag}`" if gpu_tag else ""
+    cu_val = cloud.get("colab_balance_cu")
+    cu_rate = str(cloud.get("colab_usage_rate") or "").strip()
+    cu_part = f" | CU: `{cu_val:.1f}`" + (f" ({cu_rate})" if cu_rate else "") if cu_val is not None else ""
 
     lines = [
         f"### 2. Cloud, GCE & Drive Sync (`{state}` | source `{src_tag}` | age `{age_txt}`)",
-        f"- Colab Idle Left: `{idle}`{gpu_part} | GCE: `{gce_txt}` | Backoff Cooldown: `{cd_txt}`",
+        f"- Colab Idle Left: `{idle}`{gpu_part}{cu_part} | GCE: `{gce_txt}` | Backoff Cooldown: `{cd_txt}`",
         f"- Drive: `{used_b} / {total_b}` (free `{free_b}`) | `{backend_txt}`",
     ]
     err_sum = cloud.get("error_summary") or ""
@@ -458,6 +491,7 @@ def render_inspect_markdown(payload: dict[str, Any]) -> str:
             payload.get("cloud"),
             ages.get("cloud"),
             int(payload.get("backoff_remaining_sec") or 0),
+            now_epoch=payload.get("generated_at_epoch"),
         ),
         "",
         *_render_mailbox_section(payload.get("mailbox")),

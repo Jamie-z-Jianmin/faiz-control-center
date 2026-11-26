@@ -48,7 +48,6 @@ _AUTH_LOG_RE = re.compile(
 _SECTION_HEADERS = (
     "GEMINI MODELS",
     "CLAUDE AND GPT MODELS",
-    "GEMINI 4 ARGON",
 )
 
 
@@ -262,16 +261,8 @@ def parse_usage_text(raw_text: str) -> dict[str, Any]:
         if m_match:
             models = [m.strip() for m in m_match.group(1).split(",") if m.strip()]
 
-        if header == "GEMINI 4 ARGON":
-            weekly_pct, weekly_refresh = _parse_limit_block(
-                chunk, r"Gemini 4 Argon Weekly Limit|Weekly Limit Remaining"
-            )
-            five_pct, five_refresh = None, ""
-            if not models:
-                models = ["Gemini 4 Argon"]
-        else:
-            weekly_pct, weekly_refresh = _parse_limit_block(chunk, r"Weekly Limit Remaining")
-            five_pct, five_refresh = _parse_limit_block(chunk, r"Five Hour Limit Remaining")
+        weekly_pct, weekly_refresh = _parse_limit_block(chunk, r"Weekly Limit Remaining")
+        five_pct, five_refresh = _parse_limit_block(chunk, r"Five Hour Limit Remaining")
 
         buckets.append(
             {
@@ -294,7 +285,7 @@ def _is_usage_frame1_complete(buf: bytes, *, elapsed: float = 0.0) -> bool:
         prefix = buf[:footer_idx]
         if b"CLAUDE AND GPT MODELS" in prefix or b"GEMINI MODELS" in prefix:
             last_hdr_end = -1
-            for hdr in (b"GEMINI MODELS", b"CLAUDE AND GPT MODELS", b"GEMINI 4 ARGON"):
+            for hdr in (b"GEMINI MODELS", b"CLAUDE AND GPT MODELS"):
                 idx = prefix.rfind(hdr)
                 if idx != -1:
                     end_pos = idx + len(hdr)
@@ -304,11 +295,6 @@ def _is_usage_frame1_complete(buf: bytes, *, elapsed: float = 0.0) -> bool:
                 tail = prefix[last_hdr_end:]
                 if b"%" in tail and (b"Refreshes in" in tail or b"Quota available" in tail):
                     return True
-
-    if b"GEMINI 4 ARGON" in buf:
-        argon_tail = buf[buf.rfind(b"GEMINI 4 ARGON") :]
-        if b"%" in argon_tail and (b"Refreshes in" in argon_tail or b"Quota available" in argon_tail):
-            return True
 
     if elapsed >= 4.0 and b"CLAUDE AND GPT MODELS" in buf:
         claude_tail = buf[buf.rfind(b"CLAUDE AND GPT MODELS") :]

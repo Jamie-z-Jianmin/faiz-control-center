@@ -39,8 +39,6 @@ from .statusline_config import (
     write_auto_dock_enabled,
 )
 from .store import StateStore
-from .ui.app import FaizControlCenterApp
-from .ui.config_app import StatuslineConfigApp
 
 
 async def _collect_live_store(
@@ -131,6 +129,8 @@ def _run_config_cmd(args: argparse.Namespace) -> int:
         ]
     )
     if not has_cli_flags:
+        from .ui.config_app import StatuslineConfigApp
+
         StatuslineConfigApp().run()
         return 0
 
@@ -318,6 +318,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         payload = asyncio.run(_run_once_json(skip_pty=args.no_pty, quota_only=args.quota_only))
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
+
+    from .ui.app import FaizControlCenterApp
 
     app = FaizControlCenterApp(dock=args.dock, preset=args.preset)
     app.run()

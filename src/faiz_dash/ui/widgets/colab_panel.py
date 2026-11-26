@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from rich.markup import escape
@@ -28,6 +29,21 @@ def _fmt_duration(seconds: Optional[int]) -> str:
     if hours > 0:
         return f"{hours}h{mins:02d}m"
     return f"{mins}m{secs:02d}s"
+
+
+def _fmt_uptime(created_at: str) -> str:
+    raw = (created_at or "").strip()
+    if not raw:
+        return ""
+    try:
+        iso = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        secs = max(0, int((datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()))
+        return _fmt_duration(secs)
+    except ValueError:
+        return ""
 
 
 class ColabPanel(Static):
@@ -70,9 +86,23 @@ class ColabPanel(Static):
 
         running = [inst for inst in snap.gce_instances if inst.status.upper() in {"RUNNING", "STAGING"}]
         if running:
-            gce_str = f"[bold red]{len(running)} RUN[/bold red] ({escape(running[0].name[:18])})"
+            first = running[0]
+            meta_parts: list[str] = []
+            if first.machine_type:
+                meta_parts.append(first.machine_type)
+            if first.provisioning_model.upper() == "SPOT":
+                meta_parts.append("Spot")
+            up_str = _fmt_uptime(first.created_at)
+            if up_str:
+                meta_parts.append(up_str)
+            meta_suffix = f" · {' · '.join(escape(p) for p in meta_parts)}" if meta_parts else ""
+            gce_str = f"[bold red]{len(running)} RUN[/bold red] ({escape(first.name[:18])}{meta_suffix})"
         else:
             gce_str = f"[green]0 running[/green] (total {len(snap.gce_instances)})"
+
+        cu_str = ""
+        if snap.colab_balance_cu is not None:
+            cu_str = f" · CU:{snap.colab_balance_cu:.1f}"
 
         pct_str = ""
         if snap.drive_used_bytes is not None and snap.drive_total_bytes:
@@ -95,7 +125,7 @@ class ColabPanel(Static):
 
         lines = [
             f"Colab: [{state_style}]{escape(snap.colab_state)}[/{state_style}]{gpu_str}{age_str}{mode_str}{cached_hint}",
-            f"Idle: {idle_disp} | {escape((snap.project or '-')[:20])}",
+            f"Idle: {idle_disp}{cu_str} | {escape((snap.project or '-')[:20])}",
             f"GCE: {gce_str}",
             f"Drive: {_fmt_bytes(snap.drive_used_bytes)} / {_fmt_bytes(snap.drive_total_bytes)}{pct_str}",
             flag_line,

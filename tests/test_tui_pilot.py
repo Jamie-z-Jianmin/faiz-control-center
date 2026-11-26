@@ -36,11 +36,10 @@ def _build_demo_store(cache_dir: Path) -> StateStore:
         buckets=(
             ModelBucketQuota("GEMINI MODELS", ("Gemini 4 Hydrogen",), 90.73, "Refreshes in 165h 24m", 69.09, "Refreshes in 2h 24m"),
             ModelBucketQuota("CLAUDE AND GPT MODELS", ("Claude Opus 5.5",), 100.0, "Quota available", 100.0, "Quota available"),
-            ModelBucketQuota("GEMINI 4 ARGON", ("Gemini 4 Argon",), 13.78, "Refreshes in 164h 41m"),
         ),
         channels=ProcessChannelInfo(pro_count=2, gcp_count=0),
         burn=TokenBurnStats(tokens_1h=12500, tokens_24h=85000, cache_hit_rate=0.78, active_sessions=2),
-        quota_gate="THROTTLE_ARGON",
+        quota_gate="GREEN",
         source="pty",
     )
     store.cloud = ColabGcpSnapshot(
@@ -208,10 +207,10 @@ class TestTuiPilot(unittest.IsolatedAsyncioTestCase):
                         "fetched_at": "2026-11-18T14:17:28Z",
                         "buckets": [
                             {"group_name": "GEMINI MODELS", "five_hour_pct": 60.5, "weekly_pct": 62.8, "five_hour_refresh": "Refreshes in 3h 22m"},
-                            {"group_name": "GEMINI 4 ARGON", "weekly_pct": 13.8},
+                            {"group_name": "CLAUDE AND GPT MODELS", "five_hour_pct": 100.0, "weekly_pct": 100.0},
                         ],
                         "burn": {"tokens_1h": 2076085, "tokens_24h": 13149601, "cache_hit_rate": 0.95},
-                        "quota_gate": "THROTTLE_ARGON",
+                        "quota_gate": "GREEN",
                     }
                 ),
                 encoding="utf-8",
@@ -270,7 +269,7 @@ class TestTuiPilot(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("stage_b9_failed.tts.json", m_txt)
                 self.assertIn("stage_b11_next.tts.json", m_txt)
 
-    async def test_quota_panel_two_bucket_vs_legacy_three_bucket(self) -> None:
+    async def test_quota_panel_two_bucket_rendering(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store = _build_demo_store(root / "cache")
@@ -285,9 +284,10 @@ class TestTuiPilot(unittest.IsolatedAsyncioTestCase):
             async with app.run_test(size=(140, 12)) as pilot:
                 await pilot.pause()
                 panel = app.query_one("#panel-quota")
-                legacy_txt = str(panel.render())
-                self.assertIn("Argon", legacy_txt)
-                self.assertIn("C/G", legacy_txt)
+                init_txt = str(panel.render())
+                self.assertIn("Claude", init_txt)
+                self.assertNotIn("Argon", init_txt)
+                self.assertNotIn("C/G", init_txt)
 
                 two_bucket = QuotaSnapshot(
                     fetched_at="2026-11-24T06:00:00Z",

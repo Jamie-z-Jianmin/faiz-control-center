@@ -41,6 +41,8 @@ def summarize_probe_error(err_text: Optional[str], cooldown_sec: int = 0) -> str
     if not raw:
         return f"Drive backoff active{cd_tag}" if cd_tag else ""
     upper = raw.upper()
+    if "403" in upper and ("GCE" in upper or "COMPUTE" in upper) and "RATE_LIMIT" not in upper and "RATELIMIT" not in upper:
+        return f"GCE 403 permission denied{cd_tag}"
     if "RATE_LIMIT" in upper or "RATELIMIT" in upper or "403" in upper:
         return f"Drive 403 RATE_LIMIT{cd_tag}"
     if "TIMED OUT" in upper or "TIMEOUT" in upper:
@@ -71,23 +73,13 @@ def read_backoff_remaining(backoff_path: Optional[Path] = None) -> int:
 
 
 def compute_quota_gate(quota: QuotaSnapshot) -> str:
-    """Compute advisory quota gate signal: GREEN, THROTTLE_ARGON, or WARN_PRO."""
-    pro_low = False
-    argon_low = False
+    """Compute advisory quota gate signal: GREEN or WARN_PRO."""
     for bucket in quota.buckets:
         name = bucket.group_name.upper()
         if "GEMINI MODELS" in name:
             for pct in (bucket.five_hour_pct, bucket.weekly_pct):
                 if pct is not None and pct < 20.0:
-                    pro_low = True
-        elif "ARGON" in name:
-            for pct in (bucket.weekly_pct, bucket.five_hour_pct):
-                if pct is not None and pct < 20.0:
-                    argon_low = True
-    if pro_low:
-        return "WARN_PRO"
-    if argon_low:
-        return "THROTTLE_ARGON"
+                    return "WARN_PRO"
     return "GREEN"
 
 
@@ -206,7 +198,6 @@ def _bucket_pcts(quota: QuotaSnapshot) -> dict[str, Any]:
     pro_wk_ref = ""
     claude_5h: Optional[float] = None
     claude_wk: Optional[float] = None
-    argon_wk: Optional[float] = None
     for b in quota.buckets:
         upper = b.group_name.upper()
         if "GEMINI MODELS" in upper:
@@ -217,8 +208,6 @@ def _bucket_pcts(quota: QuotaSnapshot) -> dict[str, Any]:
         elif "CLAUDE" in upper:
             claude_5h = b.five_hour_pct
             claude_wk = b.weekly_pct
-        elif "ARGON" in upper:
-            argon_wk = b.weekly_pct
 
     anchor = quota.pty_fetched_epoch if quota.pty_fetched_epoch > 0 else int(time.time())
     pro_5h_reset_at: Optional[int] = None
@@ -242,7 +231,6 @@ def _bucket_pcts(quota: QuotaSnapshot) -> dict[str, Any]:
         "pro_wk_pct": pro_wk,
         "claude_5h_pct": claude_5h,
         "claude_wk_pct": claude_wk,
-        "argon_wk_pct": argon_wk,
         "pro_5h_refresh_text": pro_5h_ref,
         "pro_5h_reset_at_epoch": pro_5h_reset_at,
         "pro_wk_reset_at_epoch": pro_wk_reset_at,
@@ -348,6 +336,7 @@ class StateStore:
                         status=str(g.get("status", "")),
                         machine_type=str(g.get("machine_type", "")),
                         created_at=str(g.get("created_at", "")),
+                        provisioning_model=str(g.get("provisioning_model", "")),
                     )
                     for g in (c.get("gce_instances") or ())
                     if isinstance(g, dict)
@@ -373,6 +362,8 @@ class StateStore:
                     colab_sessions_count=c.get("colab_sessions_count"),
                     colab_gpu=str(c.get("colab_gpu", "")),
                     colab_source=str(c.get("colab_source", "drive")),
+                    colab_balance_cu=c.get("colab_balance_cu"),
+                    colab_usage_rate=str(c.get("colab_usage_rate", "")),
                     error=c.get("error"),
                     stale=bool(c.get("stale", False)),
                 )
@@ -435,6 +426,7 @@ class StateStore:
                     "reason",
                     "updated_at",
                     "webui_url",
+                    "colab_usage_rate",
                 ):
                     if not cloud_dict.get(key) and payload.get(key):
                         cloud_dict[key] = payload[key]
@@ -444,6 +436,7 @@ class StateStore:
                     "drive_used_bytes",
                     "drive_total_bytes",
                     "drive_free_bytes",
+                    "colab_balance_cu",
                 ):
                     if cloud_dict.get(key) is None and payload.get(key) is not None:
                         cloud_dict[key] = payload[key]
@@ -512,6 +505,44 @@ class StateStore:
         self._seed_cloud_payload = payload
         return payload
 
+    def _maybe_gc_stale_cache_files(self, now_ts: Optional[float] = None) -> None:
+        """Throttled GC (every 6h) for stale session burn/speed files (>7d) and orphaned tmp files (>1h)."""
+        if not self.cache_dir.is_dir():
+            return
+        now = time.time() if now_ts is None else float(now_ts)
+        stamp = self.cache_dir / ".gc_last_ts"
+        try:
+            if stamp.is_file() and (now - stamp.stat().st_mtime) < 21600.0:
+                return
+            stamp.touch()
+        except OSError:
+            return
+
+        session_cutoff = now - 604800.0
+        tmp_cutoff = now - 3600.0
+        try:
+            for entry in self.cache_dir.iterdir():
+                if not entry.is_file():
+                    continue
+                name = entry.name
+                try:
+                    mtime = entry.stat().st_mtime
+                except OSError:
+                    continue
+                if (name.startswith(".speed_") or name.startswith(".session_burn_")) and ".tmp." not in name:
+                    if mtime < session_cutoff:
+                        try:
+                            entry.unlink()
+                        except OSError:
+                            pass
+                elif (name.endswith(".tmp") or ".tmp." in name) and mtime < tmp_cutoff:
+                    try:
+                        entry.unlink()
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
     async def publish_quota(self, quota: QuotaSnapshot) -> QuotaSnapshot:
         gate = compute_quota_gate(quota)
         pty_ep = quota.pty_fetched_epoch
@@ -527,6 +558,7 @@ class StateStore:
         normalized = replace(quota, quota_gate=gate, pty_fetched_epoch=pty_ep, fetched_at=fetched_at)
         self.quota = normalized
         atomic_write_json(self.usage_cache_path, self._build_usage_payload(normalized))
+        self._maybe_gc_stale_cache_files()
         await self._notify("quota")
         return normalized
 
@@ -537,6 +569,7 @@ class StateStore:
         self.cloud = cloud
         self.mailbox = mailbox
         atomic_write_json(self.cloud_cache_path, self._build_cloud_payload())
+        self._maybe_gc_stale_cache_files()
         await self._notify("cloud")
         await self._notify("mailbox")
         return cloud, mailbox
@@ -544,6 +577,7 @@ class StateStore:
     async def publish_cloud(self, cloud: ColabGcpSnapshot) -> ColabGcpSnapshot:
         self.cloud = cloud
         atomic_write_json(self.cloud_cache_path, self._build_cloud_payload())
+        self._maybe_gc_stale_cache_files()
         await self._notify("cloud")
         return cloud
 

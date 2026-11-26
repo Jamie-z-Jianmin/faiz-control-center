@@ -88,7 +88,7 @@ class TestInspectReport(unittest.TestCase):
                         "account": "dev@example.com",
                         "source": "pty",
                         "pty_fetched_epoch": now_ep - 600,
-                        "quota_gate": "THROTTLE_ARGON",
+                        "quota_gate": "GREEN",
                         "channels": {"pro_count": 2, "gcp_count": 1, "active_auth_method": "consumer"},
                         "buckets": [
                             {
@@ -100,12 +100,12 @@ class TestInspectReport(unittest.TestCase):
                                 "weekly_refresh": "Refreshes in 160h 50m",
                             },
                             {
-                                "group_name": "GEMINI 4 ARGON",
-                                "models": ["Gemini 4 Argon"],
-                                "five_hour_pct": None,
-                                "five_hour_refresh": "",
-                                "weekly_pct": 13.7,
-                                "weekly_refresh": "Refreshes in 160h 7m",
+                                "group_name": "CLAUDE AND GPT MODELS",
+                                "models": ["Claude Opus 5.5"],
+                                "five_hour_pct": 70.5,
+                                "five_hour_refresh": "Refreshes in 3h 10m",
+                                "weekly_pct": 88.2,
+                                "weekly_refresh": "Refreshes in 120h 0m",
                             },
                         ],
                         "burn": {
@@ -114,7 +114,7 @@ class TestInspectReport(unittest.TestCase):
                             "cache_hit_rate": 0.9542,
                             "by_model_24h": {
                                 "gemini-4-hydrogen-high": 10_038_063,
-                                "gemini-4-argon-medium": 4_855_398,
+                                "gemini-4-neon-medium": 4_855_398,
                             },
                         },
                     }
@@ -176,7 +176,7 @@ class TestInspectReport(unittest.TestCase):
             payload = collect_inspect_payload(store, telemetry_db=db_path, now_epoch=float(now_ep))
 
             md = format_inspect_output(payload, as_json=False)
-            self.assertIn("THROTTLE_ARGON", md)
+            self.assertIn("GREEN", md)
             self.assertIn("GEMINI MODELS", md)
             self.assertIn("2h40m", md)  # 2h50m minus 600s elapsed
             self.assertIn("Pace / Forecast", md)
@@ -260,6 +260,34 @@ class TestInspectReport(unittest.TestCase):
         self.assertIsNone(compute_quota_pace(50.0, None, WINDOW_5H_SECONDS))
         self.assertIsNone(compute_quota_pace(50.0, -1, WINDOW_WEEKLY_SECONDS))
         self.assertIsNone(compute_quota_pace(50.0, WINDOW_5H_SECONDS + 10, WINDOW_5H_SECONDS))
+
+    def test_inspect_renders_gce_spot_uptime_and_colab_cu(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            now_ep = 1795680000  # 2026-11-26T08:00:00Z
+            (cache / "cloud_snapshot.json").write_text(
+                json.dumps({
+                    "fetched_at": "2026-11-26T08:00:00Z",
+                    "colab_state": "ONLINE",
+                    "idle_remaining_seconds": 1800,
+                    "colab_balance_cu": 412.7,
+                    "colab_usage_rate": "2.1/hr",
+                    "gce_instances": [{
+                        "name": "spot-a",
+                        "zone": "us-central1-a",
+                        "status": "RUNNING",
+                        "machine_type": "n2-standard-4",
+                        "created_at": "2026-11-26T06:00:00Z",
+                        "provisioning_model": "SPOT",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            store = StateStore(cache_dir=cache)
+            payload = collect_inspect_payload(store, telemetry_db=cache / "none.db", telemetry_script=cache / "none.py", now_epoch=float(now_ep))
+            md = format_inspect_output(payload, as_json=False)
+            self.assertIn("CU: `412.7` (2.1/hr)", md)
+            self.assertIn("spot-a · n2-standard-4 · Spot · 2h00m", md)
 
 
 if __name__ == "__main__":

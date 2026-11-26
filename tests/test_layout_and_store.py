@@ -32,26 +32,26 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(cache_dir=Path(tmp))
 
-            q_throttle = QuotaSnapshot(
+            q_ok = QuotaSnapshot(
                 fetched_at="2026-11-18T10:00:00Z",
                 account="user@example.com",
                 buckets=(
                     ModelBucketQuota("GEMINI MODELS", weekly_pct=90.0, five_hour_pct=65.0),
                     ModelBucketQuota("CLAUDE AND GPT MODELS", weekly_pct=85.17, five_hour_pct=70.35),
-                    ModelBucketQuota("GEMINI 4 ARGON", weekly_pct=13.7),
                 ),
             )
-            published = await store.publish_quota(q_throttle)
-            self.assertEqual(published.quota_gate, "THROTTLE_ARGON")
+            published = await store.publish_quota(q_ok)
+            self.assertEqual(published.quota_gate, "GREEN")
             u_json = json.loads(store.usage_cache_path.read_text(encoding="utf-8"))
             self.assertAlmostEqual(u_json["claude_5h_pct"], 70.35)
             self.assertAlmostEqual(u_json["claude_wk_pct"], 85.17)
+            self.assertNotIn("argon_wk_pct", u_json)
 
             q_warn = QuotaSnapshot(
                 fetched_at="2026-11-18T10:00:00Z",
                 buckets=(
                     ModelBucketQuota("GEMINI MODELS", weekly_pct=80.0, five_hour_pct=12.0),
-                    ModelBucketQuota("GEMINI 4 ARGON", weekly_pct=10.0),
+                    ModelBucketQuota("CLAUDE AND GPT MODELS", weekly_pct=100.0, five_hour_pct=100.0),
                 ),
             )
             self.assertEqual(compute_quota_gate(q_warn), "WARN_PRO")
@@ -60,7 +60,7 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
                 fetched_at="2026-11-18T10:00:00Z",
                 buckets=(
                     ModelBucketQuota("GEMINI MODELS", weekly_pct=80.0, five_hour_pct=55.0),
-                    ModelBucketQuota("GEMINI 4 ARGON", weekly_pct=45.0),
+                    ModelBucketQuota("CLAUDE AND GPT MODELS", weekly_pct=15.0, five_hour_pct=15.0),
                 ),
             )
             self.assertEqual(compute_quota_gate(q_green), "GREEN")
@@ -146,7 +146,7 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
                     pty_fetched_epoch=1795000000,
                     buckets=(
                         ModelBucketQuota("GEMINI MODELS", weekly_pct=72.1, five_hour_pct=90.5),
-                        ModelBucketQuota("GEMINI 4 ARGON", weekly_pct=13.8),
+                        ModelBucketQuota("CLAUDE AND GPT MODELS", weekly_pct=100.0, five_hour_pct=100.0),
                     ),
                 )
             )
@@ -160,7 +160,7 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
                     pty_fetched_epoch=0,
                     buckets=(
                         ModelBucketQuota("GEMINI MODELS", weekly_pct=72.1, five_hour_pct=90.5),
-                        ModelBucketQuota("GEMINI 4 ARGON", weekly_pct=13.8),
+                        ModelBucketQuota("CLAUDE AND GPT MODELS", weekly_pct=100.0, five_hour_pct=100.0),
                     ),
                 )
             )
@@ -379,6 +379,74 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(reloaded.cloud)
             self.assertEqual(reloaded.cloud.drive_backend, "gdrive")  # type: ignore[union-attr]
             self.assertEqual(reloaded.cloud.colab_source, "colab_cli")  # type: ignore[union-attr]
+
+    async def test_gce_403_not_misclassified_cache_gc_and_lazy_textual_import(self) -> None:
+        import os
+        import subprocess
+        import time
+        from faiz_dash.models import GceInstanceInfo
+
+        self.assertEqual(summarize_probe_error("GCE: Compute REST HTTP 403"), "GCE 403 permission denied")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            now = time.time()
+            old_speed = cache_dir / ".speed_old.json"
+            old_burn = cache_dir / ".session_burn_old"
+            fresh_speed = cache_dir / ".speed_new.json"
+            old_tmp1 = cache_dir / ".usage_snapshot.json.abc.tmp"
+            old_tmp2 = cache_dir / ".speed_x.json.tmp.999"
+            adc_tok = cache_dir / ".gcp_adc_token.json"
+            lock_d = cache_dir / "bg_refresh.lock.d"
+            lock_d.mkdir()
+            for p in (old_speed, old_burn, fresh_speed, old_tmp1, old_tmp2, adc_tok):
+                p.write_text("x", encoding="utf-8")
+            os.utime(old_speed, (now - 8 * 86400, now - 8 * 86400))
+            os.utime(old_burn, (now - 8 * 86400, now - 8 * 86400))
+            os.utime(old_tmp1, (now - 7200, now - 7200))
+            os.utime(old_tmp2, (now - 7200, now - 7200))
+            os.utime(adc_tok, (now - 10 * 86400, now - 10 * 86400))
+
+            store = StateStore(cache_dir=cache_dir)
+            await store.publish_cloud(
+                ColabGcpSnapshot(
+                    fetched_at="2026-11-26T08:00:00Z",
+                    colab_state="ONLINE",
+                    colab_balance_cu=250.4,
+                    colab_usage_rate="1.2/hr",
+                    gce_instances=(GceInstanceInfo("g1", "us-central1-a", "RUNNING", "e2-medium", "2026-11-26T06:00:00Z", "SPOT"),),
+                )
+            )
+            self.assertFalse(old_speed.exists())
+            self.assertFalse(old_burn.exists())
+            self.assertFalse(old_tmp1.exists())
+            self.assertFalse(old_tmp2.exists())
+            self.assertTrue(fresh_speed.exists())
+            self.assertTrue(adc_tok.exists())
+            self.assertTrue(lock_d.is_dir())
+
+            reloaded = StateStore(cache_dir=cache_dir)
+            assert reloaded.cloud is not None
+            self.assertAlmostEqual(reloaded.cloud.colab_balance_cu or 0.0, 250.4)
+            self.assertEqual(reloaded.cloud.colab_usage_rate, "1.2/hr")
+            self.assertEqual(reloaded.cloud.gce_instances[0].provisioning_model, "SPOT")
+
+            # Verify non-TUI CLI commands never import textual
+            src_dir = str(Path(__file__).resolve().parents[1] / "src")
+            for argv in (["inspect", "--json"], ["doctor", "--json"], ["config", "--show"]):
+                code = (
+                    "import json, sys; "
+                    "from faiz_dash.__main__ import main; "
+                    f"main({argv!r}); "
+                    "print('TEXTUAL_LOADED' if 'textual' in sys.modules else 'LAZY_OK')"
+                )
+                res = subprocess.run(
+                    [sys.executable, "-c", code],
+                    env={**os.environ, "HOME": tmp, "PYTHONPATH": src_dir},
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertIn("LAZY_OK", res.stdout, msg=f"argv={argv} stderr={res.stderr}")
 
 
 if __name__ == "__main__":

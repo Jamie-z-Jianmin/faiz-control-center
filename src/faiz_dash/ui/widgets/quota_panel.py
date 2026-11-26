@@ -106,7 +106,6 @@ class QuotaPanel(Static):
 
         gem = _find_bucket(snap.buckets, "GEMINI MODELS")
         cla = _find_bucket(snap.buckets, "CLAUDE")
-        arg = _find_bucket(snap.buckets, "ARGON")
 
         pro_5h = gem.five_hour_pct if gem else None
         pro_5h_ref = _short_refresh(gem.five_hour_refresh) if gem else ""
@@ -114,27 +113,17 @@ class QuotaPanel(Static):
         cla_5h = cla.five_hour_pct if cla else None
         cla_wk = cla.weekly_pct if cla else None
         cla_ref = _short_refresh(cla.weekly_refresh) if cla else ""
-        arg_wk = arg.weekly_pct if arg else None
-        arg_ref = _short_refresh(arg.weekly_refresh) if arg else ""
 
         gate_color = {
             "GREEN": "green",
-            "THROTTLE_ARGON": "yellow",
             "WARN_PRO": "bold red",
         }.get(snap.quota_gate, "cyan")
 
-        if arg is not None:
-            line2 = (
-                f"Argon  {_mini_bar(arg_wk)} {_pct_text(arg_wk)}"
-                + (f" [dim]{escape(arg_ref)}[/dim]" if arg_ref else "")
-                + f" | C/G {_pct_text(cla_wk)}"
-            )
-        else:
-            line2 = (
-                f"Claude {_mini_bar(cla_wk)} {_pct_text(cla_wk)}"
-                + (f" [dim]{escape(cla_ref)}[/dim]" if cla_ref else "")
-                + f" | 5h {_pct_text(cla_5h)}"
-            )
+        line2 = (
+            f"Claude {_mini_bar(cla_wk)} {_pct_text(cla_wk)}"
+            + (f" [dim]{escape(cla_ref)}[/dim]" if cla_ref else "")
+            + f" | 5h {_pct_text(cla_5h)}"
+        )
 
         lines = [
             f"Pro 5h {_mini_bar(pro_5h)} {_pct_text(pro_5h)}"

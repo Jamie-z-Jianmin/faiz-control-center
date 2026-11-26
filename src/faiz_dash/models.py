@@ -96,6 +96,7 @@ class GceInstanceInfo:
     status: str
     machine_type: str = ""
     created_at: str = ""
+    provisioning_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,8 @@ class ColabGcpSnapshot:
     colab_sessions_count: Optional[int] = None
     colab_gpu: str = ""
     colab_source: str = "drive"
+    colab_balance_cu: Optional[float] = None
+    colab_usage_rate: str = ""
     error: Optional[str] = None
     stale: bool = False
 

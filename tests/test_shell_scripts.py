@@ -31,8 +31,9 @@ class TestShellScripts(unittest.TestCase):
                     {
                         "pro_5h_pct": 57.42,
                         "pro_wk_pct": 87.55,
-                        "argon_wk_pct": 13.78,
-                        "quota_gate": "THROTTLE_ARGON",
+                        "claude_5h_pct": 70.35,
+                        "claude_wk_pct": 85.17,
+                        "quota_gate": "GREEN",
                         "pro_count": 2,
                         "gcp_count": 1,
                         "tokens_1h": 1766049,
@@ -114,7 +115,7 @@ class TestShellScripts(unittest.TestCase):
             self.assertIn("▸ Speed 180 tok/s", plain_lines[1])
             self.assertIn("◑ Gemini 5h:57.42%(↻", plain_lines[1])
             self.assertIn(") · Wk:87.55%", plain_lines[1])
-            self.assertIn("▲ Argon 13.78% Low", plain_lines[3])
+            self.assertIn("◕ Claude 5h:70.35% · Wk:85.17%", plain_lines[3])
             self.assertIn("◆ Session 4.4K · 1h:1.8M", plain_lines[3])
             self.assertIn("● Colab ONLINE · 44m left", plain_lines[3])
             self.assertIn("▲ Queue 2 Run · 1 Fail", plain_lines[3])
@@ -138,7 +139,7 @@ class TestShellScripts(unittest.TestCase):
             self.assertIn("Cache 99%", plain_lines_91[1])
             self.assertIn("Speed 180t/s", plain_lines_91[1])
             self.assertIn("Gemini 57.42%·87.55%", plain_lines_91[1])
-            self.assertIn("Argon 13.78%!", plain_lines_91[3])
+            self.assertIn("Claude 70.35%·85.17%", plain_lines_91[3])
             self.assertIn("◆ Burn 4.4K", plain_lines_91[3])
             self.assertIn("Colab ON(44m)", plain_lines_91[3])
             self.assertIn("Queue 2R · 1F", plain_lines_91[3])
@@ -153,7 +154,7 @@ class TestShellScripts(unittest.TestCase):
             )
             os.utime(t_cold, (now_ep - 300, now_ep - 300))
             (cache_dir / "usage_snapshot.json").write_text(
-                json.dumps({"pro_5h_pct": 100.0, "pro_wk_pct": 3.86, "argon_wk_pct": 1.63, "claude_5h_pct": 100.0, "claude_wk_pct": 77.82, "quota_gate": "WARN_PRO", "pro_count": 3, "gcp_count": 0}),
+                json.dumps({"pro_5h_pct": 100.0, "pro_wk_pct": 3.86, "claude_5h_pct": 100.0, "claude_wk_pct": 77.82, "quota_gate": "WARN_PRO", "pro_count": 3, "gcp_count": 0}),
                 encoding="utf-8",
             )
             env_91_cold = {**env_91, "FAIZ_TRANSCRIPT_PATH": str(t_cold)}
@@ -172,8 +173,9 @@ class TestShellScripts(unittest.TestCase):
                     {
                         "pro_5h_pct": 57.42,
                         "pro_wk_pct": 87.55,
-                        "argon_wk_pct": 13.78,
-                        "quota_gate": "THROTTLE_ARGON",
+                        "claude_5h_pct": 70.35,
+                        "claude_wk_pct": 85.17,
+                        "quota_gate": "GREEN",
                         "pro_count": 2,
                         "gcp_count": 1,
                         "tokens_1h": 1766049,
@@ -204,6 +206,10 @@ class TestShellScripts(unittest.TestCase):
             )
 
             # Explicit density="compact" on 91-col split packs into 1 single compact row (+ leading top_gap)
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({"pro_5h_pct": 57.42, "pro_wk_pct": 87.55, "claude_5h_pct": 100.0, "claude_wk_pct": 100.0, "quota_gate": "GREEN", "pro_count": 2, "gcp_count": 1, "tokens_1h": 1766049, "pro_5h_reset_at_epoch": int(time.time() + 12750)}),
+                encoding="utf-8",
+            )
             (fake_home / ".agents" / "statusline_config.json").write_text(
                 json.dumps({"density": "compact"}), encoding="utf-8"
             )
@@ -214,7 +220,11 @@ class TestShellScripts(unittest.TestCase):
             self.assertNotIn("\n", plain_compact)
             self.assertIn("Ctx 32%·C99%·180t/s", plain_compact)
 
-            # Reset config to default density="auto" for narrow 4x2 checks
+            # Reset config to default density="auto" and 2-bucket active Claude fixture for narrow 4x2 checks
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({"pro_5h_pct": 57.42, "pro_wk_pct": 87.55, "claude_5h_pct": 70.35, "claude_wk_pct": 85.17, "quota_gate": "GREEN", "pro_count": 2, "gcp_count": 1, "tokens_1h": 1766049, "pro_5h_reset_at_epoch": int(time.time() + 12750)}),
+                encoding="utf-8",
+            )
             (fake_home / ".agents" / "statusline_config.json").write_text("{}", encoding="utf-8")
 
             # Explicit 58-col narrow split (FAIZ_TERM_WIDTH=60) with density="auto": tight 5-line 4x2 slate-blue outline grid
@@ -264,15 +274,15 @@ class TestShellScripts(unittest.TestCase):
             self.assertIn("78;132;98", cap_lines[1])   # Gemini overridden to green border
             self.assertIn("162;82;84", cap_lines[4])   # Queue overridden to red border
 
-            # Explicit density="expanded" with custom row_colors on 95-col split wraps cleanly onto 2 frosted rows (Blue / Green)
+            # Explicit density="expanded" with custom row_colors on 110-col split wraps cleanly onto 2 frosted rows (Blue / Green)
             (fake_home / ".agents" / "statusline_config.json").write_text(
                 json.dumps({"density": "expanded", "line_gap": False, "row_colors": ["blue", "green"]}), encoding="utf-8"
             )
-            env_95 = {**env, "FAIZ_TERM_WIDTH": "95"}
-            res_95 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_95, capture_output=True, check=True)
-            out_95 = res_95.stdout.decode("utf-8", errors="replace").strip()
-            self.assertNotIn("\n\n", out_95)
-            parts = out_95.splitlines()
+            env_110 = {**env, "FAIZ_TERM_WIDTH": "110"}
+            res_110 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_110, capture_output=True, check=True)
+            out_110 = res_110.stdout.decode("utf-8", errors="replace").strip()
+            self.assertNotIn("\n\n", out_110)
+            parts = out_110.splitlines()
             self.assertEqual(len(parts), 2)
             self.assertIn("35;45;64", parts[0])
             self.assertNotIn("27;52;38", parts[0])
@@ -287,7 +297,7 @@ class TestShellScripts(unittest.TestCase):
             plain_exp_wide = re.sub(r"\x1b\[[0-9;]*m", "", raw_exp_wide.strip())
             self.assertNotIn("\n", plain_exp_wide)
             self.assertIn("▸ 180t/s", plain_exp_wide)
-            self.assertIn("▲ Argon 13.78% (Low)", plain_exp_wide)
+            self.assertIn("◕ Claude 5h:70.35% · Wk:85.17%", plain_exp_wide)
             self.assertIn("▲ Queue 2Q·1F", plain_exp_wide)
             self.assertIn("live", plain_exp_wide)
 
@@ -297,7 +307,7 @@ class TestShellScripts(unittest.TestCase):
             cache_dir = fake_home / ".agents" / "cache"
             cache_dir.mkdir(parents=True)
             (cache_dir / "usage_snapshot.json").write_text(
-                json.dumps({"pro_5h_pct": 52.0, "pro_wk_pct": 86.0, "argon_wk_pct": 13.8, "pro_count": 3, "gcp_count": 0}),
+                json.dumps({"pro_5h_pct": 52.0, "pro_wk_pct": 86.0, "pro_count": 3, "gcp_count": 0}),
                 encoding="utf-8",
             )
             (cache_dir / "cloud_snapshot.json").write_text(
@@ -773,8 +783,8 @@ esac
                     {
                         "pro_5h_pct": 80.25,
                         "pro_wk_pct": 91.5,
+                        "claude_5h_pct": 92.5,
                         "claude_wk_pct": 88.25,
-                        "argon_wk_pct": 64.0,
                         "quota_gate": "GREEN",
                         "pty_fetched_epoch": int(time.time()),
                     }
@@ -797,7 +807,7 @@ esac
             res = subprocess.run([str(STATUSLINE_SH)], input=b"{}", env=env, capture_output=True, check=True)
             plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
             self.assertIn("Gemini 5h:80.25% · Wk:91.50%", plain)
-            self.assertIn("Argon 64.00% · Claude 88.25%", plain)
+            self.assertIn("Claude 5h:92.50% · Wk:88.25%", plain)
             self.assertNotIn("Colab", plain)
             self.assertNotIn("Queue", plain)
 
@@ -806,7 +816,7 @@ esac
             )
             res_exp = subprocess.run([str(STATUSLINE_SH)], input=b"{}", env=env, capture_output=True, check=True)
             plain_exp = re.sub(r"\x1b\[[0-9;]*m", "", res_exp.stdout.decode("utf-8", errors="replace"))
-            self.assertIn("Claude 88.25%", plain_exp)
+            self.assertIn("Claude 5h:92.50% · Wk:88.25%", plain_exp)
 
     def test_statusline_merges_claude_5h_wk_and_tracks_session_burn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -823,7 +833,6 @@ esac
                         "pro_wk_pct": 17.11,
                         "claude_5h_pct": 70.35,
                         "claude_wk_pct": 85.17,
-                        "argon_wk_pct": 9.43,
                         "quota_gate": "WARN_PRO",
                         "tokens_1h": 1200000,
                         "pty_fetched_epoch": int(now - 2),
@@ -870,8 +879,8 @@ esac
             self.assertIn("╌", plain_90[2])
             self.assertEqual(len({len(ln) for ln in plain_90}), 1)
             self.assertLessEqual(len(plain_90[1]), 88)
-            self.assertIn("Gemini 0.0%·17.1%", plain_90[1])
-            self.assertIn("Arg 9.4!·Cla 70·85%", plain_90[3])
+            self.assertIn("Gemini 0.00%·17.11%", plain_90[1])
+            self.assertIn("Claude 70.35%·85.17%!", plain_90[3])
             self.assertIn("Burn 4.4K", plain_90[3])
 
             # At >=96 columns (A2 adaptive expansion), Cla displays full 2 decimals and stays aligned 2x4 matrix
@@ -883,9 +892,9 @@ esac
             self.assertIn("─", plain_104_lines[0])
             self.assertIn("╌", plain_104_lines[2])
             self.assertEqual(len({len(ln) for ln in plain_104_lines}), 1)
-            self.assertIn("Arg 9.43%!·Cla 70.35%·85.17%", plain_104_lines[3])
+            self.assertIn("Claude 70.35%·85.17%!", plain_104_lines[3])
 
-            # At >=155 columns (W1-A wide 2x4 bento matrix), full labels + merged Argon·Claude spread evenly to eff_cols
+            # At >=155 columns (W1-A wide 2x4 bento matrix), full labels + Claude spread evenly to eff_cols
             env_180 = {**env, "FAIZ_TERM_WIDTH": "180"}
             res_180 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_180, capture_output=True, check=True)
             lines_180 = res_180.stdout.decode("utf-8", errors="replace").splitlines()
@@ -896,10 +905,10 @@ esac
             self.assertEqual(len({len(ln) for ln in plain_180_lines}), 1)
             self.assertEqual(len(plain_180_lines[1]), 178)
             self.assertIn("Gemini 5h:0.00% · Wk:17.11%", plain_180_lines[1])
-            self.assertIn("Argon 9.43%! · Claude 70.35%·85.17%", plain_180_lines[3])
+            self.assertIn("Claude 5h:70.35% · Wk:85.17% Pro!", plain_180_lines[3])
             self.assertIn("Queue 2 Fail", plain_180_lines[3])
 
-            # At 60 columns (5-line 4x2 narrow outline matrix), merges Arg·Cla with % and renders concise Gemini without rainbow fills
+            # At 60 columns (5-line 4x2 narrow outline matrix), renders concise Gemini & Claude without rainbow fills
             env_60 = {**env, "FAIZ_TERM_WIDTH": "60"}
             res_60 = subprocess.run([str(STATUSLINE_SH)], input=payload, env=env_60, capture_output=True, check=True)
             out_60 = res_60.stdout.decode("utf-8", errors="replace")
@@ -912,7 +921,7 @@ esac
             self.assertEqual(len({len(ln) for ln in plain_60_lines}), 1)
             self.assertEqual(len(plain_60_lines[0]), 58)
             self.assertIn("[ ○ Gemini 0%·17%", plain_60_lines[1])
-            self.assertIn("[ ▲ Arg 9.4%!·Cla 70·85%", plain_60_lines[3])
+            self.assertIn("[ ▲ Claude 70%·85%", plain_60_lines[3])
 
             # Appending turns incrementally updates single-session Burn to 2-decimal M
             with t_file.open("a", encoding="utf-8") as fh:
@@ -956,7 +965,7 @@ esac
             (cache_dir / ".bg_pty_ts").write_text("", encoding="utf-8")
             c_file = cache_dir / "cloud_snapshot.json"
             c_file.write_text(json.dumps({"colab_state": "STOPPED", "cloud_ok": True}), encoding="utf-8")
-            os.utime(c_file, (now - 120, now - 120))
+            os.utime(c_file, (now - 320, now - 320))
             (cache_dir / "cloud_backoff.json").write_text(
                 json.dumps({"next_allowed_epoch": now + 240}),
                 encoding="utf-8",
@@ -986,7 +995,7 @@ esac
             self.assertIn("Colab IDLE", plain)
             self.assertNotIn("LIMIT", plain)
 
-    def test_statusline_two_bucket_claude_replaces_argon_across_modes(self) -> None:
+    def test_statusline_two_bucket_claude_across_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fake_home = root / "home"
@@ -1000,7 +1009,6 @@ esac
                         "pro_wk_pct": 42.5,
                         "claude_5h_pct": 100.0,
                         "claude_wk_pct": 100.0,
-                        "argon_wk_pct": None,
                         "quota_gate": "WARN_PRO",
                         "pro_count": 2,
                         "gcp_count": 0,
@@ -1038,14 +1046,13 @@ esac
             }
             payload = b'{"context_window":{"used_percentage":42}}'
 
-            # 1. Auto wide (180 cols): Claude pill replaces Argon, WARN_PRO preserved, no duplicate 3rd Claude capsule
+            # 1. Auto wide (180 cols): Claude pill, WARN_PRO preserved, single Claude capsule
             cfg_file.write_text(json.dumps({"density": "auto"}), encoding="utf-8")
             res_wide = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "180"}, capture_output=True, check=True)
             plain_wide = re.sub(r"\x1b\[[0-9;]*m", "", res_wide.stdout.decode("utf-8", errors="replace"))
             lines_wide = plain_wide.splitlines()
             self.assertEqual(len(lines_wide), 4)
             self.assertIn("Claude 5h:100.00% · Wk:100.00% Pro!", lines_wide[3])
-            self.assertNotIn("Argon", plain_wide)
             self.assertEqual(plain_wide.count("Claude"), 1)
 
             # 2. Auto narrow 90 cols (2x4): stays 4-line aligned full-width matrix (88c), keeps exact 2dp, stacks Claude in Col 4
@@ -1057,33 +1064,29 @@ esac
             self.assertIn("Gemini 15.25%·42.50%", lines_90[1])
             self.assertIn("Claude 100.00%·100.00%!", lines_90[3])
             self.assertTrue(lines_90[3].rstrip().endswith("Claude 100.00%·100.00%! "))
-            self.assertNotIn("Arg", plain_90)
 
-            # 3. Auto narrow 46 cols (4x2): stays 5-line aligned matrix, shows Cla, no Argon
+            # 3. Auto narrow 46 cols (4x2): stays 5-line aligned matrix, shows Cla
             res_46 = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "46"}, capture_output=True, check=True)
             plain_46 = re.sub(r"\x1b\[[0-9;]*m", "", res_46.stdout.decode("utf-8", errors="replace"))
             lines_46 = plain_46.splitlines()
             self.assertEqual(len(lines_46), 5)
             self.assertEqual(len({len(ln) for ln in lines_46}), 1)
             self.assertIn("Cla ", lines_46[3])
-            self.assertNotIn("Arg", plain_46)
 
-            # 4. Expanded mode (180 cols): single Claude capsule + WARN_PRO, plus capsule_colors.argon fallback
-            cfg_file.write_text(json.dumps({"density": "expanded", "capsule_colors": {"argon": "green"}}), encoding="utf-8")
+            # 4. Expanded mode (180 cols): single Claude capsule + WARN_PRO, plus capsule_colors.claude override
+            cfg_file.write_text(json.dumps({"density": "expanded", "capsule_colors": {"claude": "green"}}), encoding="utf-8")
             res_exp = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "180"}, capture_output=True, check=True)
             out_exp = res_exp.stdout.decode("utf-8", errors="replace")
             plain_exp = re.sub(r"\x1b\[[0-9;]*m", "", out_exp)
             self.assertIn("Claude 5h:100.00% · Wk:100.00% (Pro!)", plain_exp)
             self.assertEqual(plain_exp.count("Claude"), 1)
-            self.assertNotIn("Argon", plain_exp)
-            self.assertIn("27;52;38", out_exp)  # green capsule glass bg from capsule_colors.argon fallback
+            self.assertIn("27;52;38", out_exp)  # green capsule glass bg from capsule_colors.claude
 
             # 5. Compact mode: WARN_PRO ! badge on Gem pill, plus Cla when Claude < 99.9% and alert/warn escalation
             cfg_file.write_text(json.dumps({"density": "compact", "color_mode": "semantic"}), encoding="utf-8")
             res_cmp_full = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "120"}, capture_output=True, check=True)
             plain_cmp_full = re.sub(r"\x1b\[[0-9;]*m", "", res_cmp_full.stdout.decode("utf-8", errors="replace"))
             self.assertIn("Gem 15.25/42.50%!", plain_cmp_full)
-            self.assertNotIn("Arg", plain_cmp_full)
             self.assertNotIn("Cla", plain_cmp_full)
 
             # Lower Claude below 20% while Pro is healthy -> compact escalates to alert ("64;30;31" + ▲)
@@ -1094,7 +1097,6 @@ esac
                         "pro_wk_pct": 90.0,
                         "claude_5h_pct": 18.5,
                         "claude_wk_pct": 65.0,
-                        "argon_wk_pct": None,
                         "quota_gate": "GREEN",
                         "pty_fetched_epoch": int(now - 5),
                     }
@@ -1107,16 +1109,15 @@ esac
             self.assertIn("Gem 85.00/90.00%·▲18.50%·65.00%", plain_cmp_low)
             self.assertIn("64;30;31", out_cmp_low)  # alert glass bg
 
-            # 6. Missing Claude & Argon -> no dead Argon -- capsule emitted
+            # 6. Missing Claude -> no dead Claude capsule emitted
             (cache_dir / "usage_snapshot.json").write_text(
-                json.dumps({"pro_5h_pct": 85.0, "pro_wk_pct": 90.0, "argon_wk_pct": None, "quota_gate": "GREEN", "pty_fetched_epoch": int(now - 5)}),
+                json.dumps({"pro_5h_pct": 85.0, "pro_wk_pct": 90.0, "quota_gate": "GREEN", "pty_fetched_epoch": int(now - 5)}),
                 encoding="utf-8",
             )
             cfg_file.write_text(json.dumps({"density": "expanded"}), encoding="utf-8")
             res_no_cla = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**base_env, "FAIZ_TERM_WIDTH": "160"}, capture_output=True, check=True)
             plain_no_cla = re.sub(r"\x1b\[[0-9;]*m", "", res_no_cla.stdout.decode("utf-8", errors="replace"))
             self.assertIn("Gemini 5h:85.00% · Wk:90.00%", plain_no_cla)
-            self.assertNotIn("Argon", plain_no_cla)
             self.assertNotIn("Claude", plain_no_cla)
 
     def test_statusline_new_session_ignores_previous_brain_transcript_and_shows_zero_burn(self) -> None:
@@ -1706,6 +1707,275 @@ esac
             self.assertNotEqual(res4.returncode, 0)
             self.assertIn("Invalid JSON", res4.stderr)
             self.assertEqual(settings_f.read_text(encoding="utf-8"), "{corrupt json")
+
+    def test_statusline_corrupt_and_non_object_json_resilience(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            cfg_file = fake_home / ".agents" / "statusline_config.json"
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_STATUSLINE_CONFIG": str(cfg_file),
+                "FAIZ_TRANSCRIPT_PATH": "",
+                "FAIZ_TERM_WIDTH": "120",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            for bad_txt in ("{broken", "null", "[]", "123", "   \n"):
+                (cache_dir / "usage_snapshot.json").write_text(bad_txt, encoding="utf-8")
+                (cache_dir / "cloud_snapshot.json").write_text(bad_txt, encoding="utf-8")
+                cfg_file.write_text(bad_txt, encoding="utf-8")
+                res = subprocess.run([str(STATUSLINE_SH)], input=bad_txt.encode("utf-8"), env=env, capture_output=True)
+                self.assertEqual(res.returncode, 0, msg=f"Failed on bad_txt={bad_txt!r}: {res.stderr!r}")
+                plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
+                self.assertIn("Faiz", plain)
+
+    def test_statusline_burn_cache_byte_cap_prevents_double_count_and_iso_epoch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            brain_logs = fake_home / ".gemini" / "antigravity-cli" / "brain" / "sess-burn" / ".system_generated" / "logs"
+            cache_dir.mkdir(parents=True)
+            brain_logs.mkdir(parents=True)
+            t_file = brain_logs / "transcript.jsonl"
+            now = time.time()
+            # Test exact +08:00 and GCE-style fractional -07:00 timestamps
+            # 2026-11-26T16:00:00+08:00 == 2026-11-26T08:00:00Z (1795680000)
+            # 2020-09-21T06:22:21.604-07:00 == 2020-09-21T13:22:21Z (1600694541)
+            line1 = json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10)), "input_tokens": 1000, "cache_read_tokens": 0, "output_tokens": 200}) + "\n"
+            t_file.write_text(line1, encoding="utf-8")
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_TRANSCRIPT_PATH": str(t_file),
+                "FAIZ_TERM_WIDTH": "160",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            subprocess.run([str(STATUSLINE_SH)], input=b'{"context_window":{"used_percentage":10}}', env=env, capture_output=True, check=True)
+            burn_file = cache_dir / ".session_burn_sess-burn"
+            self.assertTrue(burn_file.exists())
+            parts1 = burn_file.read_text(encoding="utf-8").strip().split("\t")
+            self.assertEqual(int(parts1[1]), len(line1.encode("utf-8")))
+            self.assertEqual(int(parts1[2]), 1200)
+
+            # Verify GCE Spot uptime + iso_epoch exact UTC math via statusline output
+            # If created_at is 2h ago in +08:00, uptime must be 2h00m (NOT 10h or 0m!)
+            two_h_ago_utc = now - 7200
+            cst_str = time.strftime("%Y-%m-%dT%H:%M:%S.604+08:00", time.gmtime(two_h_ago_utc + 8 * 3600))
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps({
+                    "colab_state": "ONLINE",
+                    "idle_remaining_seconds": 1800,
+                    "colab_balance_cu": 484.25,
+                    "gce_running_count": 1,
+                    "gce_instances": [{"name": "spot-1", "zone": "us-central1-a", "status": "RUNNING", "machine_type": "n2-standard-4", "created_at": cst_str, "provisioning_model": "SPOT"}],
+                }),
+                encoding="utf-8",
+            )
+            res = subprocess.run([str(STATUSLINE_SH)], input=b'{"context_window":{"used_percentage":10}}', env=env, capture_output=True, check=True)
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("GCE:1·Spot(2h00m)", plain)
+            self.assertIn("CU:484.3", plain)
+
+    def test_statusline_gcp_mode_replaces_claude_keeps_gemini_and_60s_rpm_tpm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            t_file = root / "transcript.jsonl"
+            # Two entries WITHOUT step_index (must NOT collapse RPM to 1!) + duplicate step_index=5
+            ts_recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10))
+            ts_old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 180))
+            t_file.write_text(
+                "\n".join([
+                    json.dumps({"type": "PLANNER_RESPONSE", "status": "DONE", "created_at": ts_old, "input_tokens": 900000, "cache_read_tokens": 0, "output_tokens": 1000}),
+                    json.dumps({"type": "PLANNER_RESPONSE", "status": "DONE", "created_at": ts_recent, "input_tokens": 10000, "cache_read_tokens": 20000, "output_tokens": 500}),
+                    json.dumps({"type": "PLANNER_RESPONSE", "status": "DONE", "created_at": ts_recent, "input_tokens": 10000, "cache_read_tokens": 10000, "output_tokens": 500}),
+                    json.dumps({"step_index": 5, "type": "PLANNER_RESPONSE", "status": "STREAMING", "created_at": ts_recent, "input_tokens": 1000, "cache_read_tokens": 0, "output_tokens": 100}),
+                    json.dumps({"step_index": 5, "type": "PLANNER_RESPONSE", "status": "DONE", "created_at": ts_recent, "input_tokens": 5000, "cache_read_tokens": 4000, "output_tokens": 500}),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            cfg_file = fake_home / ".agents" / "statusline_config.json"
+            cfg_file.write_text(json.dumps({"density": "auto", "cloud": {"gcp_project": "faiz-gpu-engine"}}), encoding="utf-8")
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({
+                    "pro_5h_pct": 92.5,
+                    "pro_wk_pct": 88.0,
+                    "claude_5h_pct": 10.0,
+                    "claude_wk_pct": 10.0,
+                    "pty_fetched_epoch": int(now - 5),
+                }),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps({"colab_state": "STOPPED", "mailbox_tasks_count": 0, "mailbox_failed_count": 0}),
+                encoding="utf-8",
+            )
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "AGY_ADC_AUTH": "1",
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_STATUSLINE_CONFIG": str(cfg_file),
+                "FAIZ_TRANSCRIPT_PATH": str(t_file),
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            payload = b'{"context_window":{"used_percentage":25}}'
+
+            # 1. Wide 180 cols: Gemini kept, Claude replaced by GCP (30500+20500+9500 = 60500 -> 61K TPM, 3 RPM!)
+            res_wide = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**env, "FAIZ_TERM_WIDTH": "180"}, capture_output=True, check=True)
+            plain_wide = re.sub(r"\x1b\[[0-9;]*m", "", res_wide.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Gemini 5h:92.50% · Wk:88.00%", plain_wide)
+            self.assertNotIn("Claude", plain_wide)
+            self.assertIn("GCP faiz-gpu-engi… · 61K TPM · 3 RPM", plain_wide)
+
+            # 2. 91 cols (2x4) & 125/154/156 cols (threshold -lt 157): aligned 2x4, never drops to flow
+            for w in ("91", "125", "154", "156"):
+                res_w = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**env, "FAIZ_TERM_WIDTH": w}, capture_output=True, check=True)
+                plain_w = re.sub(r"\x1b\[[0-9;]*m", "", res_w.stdout.decode("utf-8", errors="replace"))
+                lines_w = plain_w.splitlines()
+                self.assertEqual(len(lines_w), 4, msg=f"width={w} broke 2x4: {plain_w}")
+                self.assertNotIn("Claude", plain_w)
+                self.assertIn("GCP 61K · 3r", lines_w[3])
+
+            # 3. Compact mode: replaces Cla with GCP even though claude was 10%
+            cfg_file.write_text(json.dumps({"density": "compact"}), encoding="utf-8")
+            res_cmp = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**env, "FAIZ_TERM_WIDTH": "120"}, capture_output=True, check=True)
+            plain_cmp = re.sub(r"\x1b\[[0-9;]*m", "", res_cmp.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("GCP 61K·3r", plain_cmp)
+            self.assertNotIn("Cla", plain_cmp)
+
+            # 4. Quota syncing (no usage_snapshot.json) STILL renders GCP capsule
+            (cache_dir / "usage_snapshot.json").unlink()
+            cfg_file.write_text(json.dumps({"density": "auto"}), encoding="utf-8")
+            res_sync = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**env, "FAIZ_TERM_WIDTH": "120"}, capture_output=True, check=True)
+            plain_sync = re.sub(r"\x1b\[[0-9;]*m", "", res_sync.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("Quota syncing", plain_sync)
+            self.assertIn("GCP 61K · 3r", plain_sync)
+
+    def test_statusline_adaptive_cloud_polling_three_tiers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            (fake_home / ".config" / "colab-cli").mkdir(parents=True)
+            now = time.time()
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({"pro_5h_pct": 80.0, "pro_wk_pct": 70.0, "pty_fetched_epoch": int(now)}),
+                encoding="utf-8",
+            )
+            (cache_dir / ".bg_pty_ts").write_text("", encoding="utf-8")
+            marker = root / "cloud_calls.log"
+            fake_dash = root / "fake-dash"
+            fake_dash.write_text(f"#!/usr/bin/env bash\necho \"$@\" >> {str(marker)!r}\n", encoding="utf-8")
+            fake_dash.chmod(0o755)
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "FAIZ_DASH_BIN": str(fake_dash),
+                "FAIZ_TRANSCRIPT_PATH": "",
+                "FAIZ_TERM_WIDTH": "160",
+            }
+            env.pop("FAIZ_STATUSLINE_NO_BG", None)
+
+            c_file = cache_dir / "cloud_snapshot.json"
+            # Tier 1: Active (gce_running_count > 0) at 40s triggers refresh (> 30s)
+            c_file.write_text(json.dumps({"colab_state": "STOPPED", "gce_running_count": 1}), encoding="utf-8")
+            os.utime(c_file, (now - 40, now - 40))
+            subprocess.run([str(STATUSLINE_SH)], input=b"{}", env=env, capture_output=True, check=True)
+            deadline = time.monotonic() + 1.5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists())
+
+            # Tier 2: Transient DEGRADED (non-rate_limit) at 100s triggers refresh (> 90s)
+            marker.unlink()
+            lock_d = cache_dir / "bg_refresh.lock.d"
+            if lock_d.exists():
+                lock_d.rmdir()
+            if (cache_dir / ".bg_cloud_ts").exists():
+                (cache_dir / ".bg_cloud_ts").unlink()
+            c_file.write_text(json.dumps({"colab_state": "DEGRADED", "cloud_error_kind": "timeout"}), encoding="utf-8")
+            os.utime(c_file, (now - 100, now - 100))
+            subprocess.run([str(STATUSLINE_SH)], input=b"{}", env=env, capture_output=True, check=True)
+            deadline = time.monotonic() + 1.5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists())
+
+    def test_remote_install_sh_dry_run_with_uv_and_no_python(self) -> None:
+        remote_install = REPO_ROOT / "docs" / "site" / "install.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_bin = Path(tmp) / "bin"
+            fake_bin.mkdir()
+            for cmd_name in ("uv", "jq"):
+                p = fake_bin / cmd_name
+                p.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+                p.chmod(0o755)
+            env = {
+                "PATH": f"{fake_bin}:/bin:/usr/bin",
+                "HOME": tmp,
+                "DRY_RUN": "1",
+            }
+            res = subprocess.run(["bash", str(remote_install)], env=env, capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, msg=res.stderr)
+            self.assertIn("uv-managed (Python 3.12)", res.stdout)
+
+    def test_statusline_iso_epoch_exact_and_gcp_not_configured_6_capsules(self) -> None:
+        # Exact UTC epoch check for +08:00 and GCE fractional -07:00 using statusline's iso_epoch jq def
+        sh_src = STATUSLINE_SH.read_text(encoding="utf-8")
+        m = re.search(r"(def iso_epoch:.*?end;)", sh_src, re.DOTALL)
+        self.assertIsNotNone(m)
+        jq_expr = (
+            f"{m.group(1)} "
+            '("2026-11-26T16:00:00+08:00" | iso_epoch), '
+            '("2020-09-21T06:22:21.604-07:00" | iso_epoch)'
+        )
+        res = subprocess.run(["jq", "-rn", jq_expr], capture_output=True, text=True, check=True)
+        vals = [int(line.strip()) for line in res.stdout.strip().splitlines()]
+        self.assertEqual(vals, [1795680000, 1600694541])
+
+        # Verify AGY_ADC_AUTH=1 with NOT_CONFIGURED (6 capsules) still shows GCP capsule cleanly
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({"pro_5h_pct": 90.0, "pro_wk_pct": 90.0, "pty_fetched_epoch": int(now)}),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps({"colab_state": "NOT_CONFIGURED"}),
+                encoding="utf-8",
+            )
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "AGY_ADC_AUTH": "1",
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_TRANSCRIPT_PATH": "",
+                "FAIZ_TERM_WIDTH": "120",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            out = subprocess.run([str(STATUSLINE_SH)], input=b'{"context_window":{"used_percentage":15}}', env=env, capture_output=True, check=True)
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", out.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("GCP 0 · 0r", plain)
+            self.assertNotIn("Claude", plain)
 
 
 if __name__ == "__main__":
