@@ -177,11 +177,70 @@ class TestCloudProbe(unittest.IsolatedAsyncioTestCase):
                     "warnings": [],
                 }
 
-        probe = CloudProbe(UnconfiguredDrive(), gcloud_bin="/nonexistent/gcloud")
+        probe = CloudProbe(
+            UnconfiguredDrive(),
+            gcloud_bin="/nonexistent/gcloud",
+            gcp_project="your-gcp-project",
+            adc_path=Path("/nonexistent/adc.json"),
+        )
         snap = await probe.collect()
         self.assertEqual(snap.colab_state, "NOT_CONFIGURED")
         self.assertIsNone(snap.error)
         self.assertFalse(snap.stale)
+
+    async def test_pure_gcp_gce_without_colab_or_drive(self) -> None:
+        class UnconfiguredDrive(FakeDriveGateway):
+            def capabilities(self) -> dict[str, object]:
+                return {
+                    "configured": False,
+                    "backend": "rclone",
+                    "read": False,
+                    "write": False,
+                    "readonly": False,
+                    "shared_client_id": False,
+                    "warnings": [],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            adc_file = Path(tmp) / "adc.json"
+            adc_file.write_text(
+                json.dumps({
+                    "type": "authorized_user",
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                    "refresh_token": "rt",
+                    "quota_project_id": "pure-gcp-proj",
+                }),
+                encoding="utf-8",
+            )
+            probe = CloudProbe(
+                UnconfiguredDrive(),
+                gcloud_bin="",
+                gcp_project="your-gcp-project",
+                cache_dir=Path(tmp),
+                adc_path=adc_file,
+            )
+
+            async def fake_gce() -> tuple[tuple[GceInstanceInfo, ...], None]:
+                return (
+                    GceInstanceInfo(
+                        name="spot-only",
+                        zone="us-central1-a",
+                        status="RUNNING",
+                        machine_type="n2-standard-4",
+                        created_at="2026-11-26T06:00:00Z",
+                        provisioning_model="SPOT",
+                    ),
+                ), None
+
+            probe._fetch_gce_instances = fake_gce  # type: ignore[method-assign]
+            snap = await probe.collect()
+            self.assertEqual(snap.colab_state, "NOT_CONFIGURED")
+            self.assertEqual(snap.project, "pure-gcp-proj")
+            self.assertEqual(len(snap.gce_instances), 1)
+            self.assertEqual(snap.gce_instances[0].name, "spot-only")
+            self.assertFalse(snap.stale)
+            self.assertIsNone(snap.error)
 
     def test_parse_colab_sessions_and_usage(self) -> None:
         empty_out = "[colab] No active sessions found on server.\n"

@@ -59,6 +59,7 @@ DEFAULT_CLOUD_PATHS: dict[str, str] = {
     "mailbox_root": "Colab_Notebooks/mailbox",
     "projects_root": "Projects",
 }
+GCP_THRESHOLD_KEYS = ("gcp_tpm_warn", "gcp_tpm_alert", "gcp_rpm_warn", "gcp_rpm_alert")
 
 DEFAULT_STATUSLINE_CONFIG: dict[str, Any] = {
     "version": 1,
@@ -180,6 +181,10 @@ def _normalize_config(raw: dict[str, Any], base_cloud: Optional[dict[str, str]] 
             val = str(cloud_raw.get(key, "")).strip()
             if val:
                 cfg["cloud"][key] = val
+        for key in GCP_THRESHOLD_KEYS:
+            raw_thr = cloud_raw.get(key)
+            if isinstance(raw_thr, int) and not isinstance(raw_thr, bool) and raw_thr > 0:
+                cfg["cloud"][key] = raw_thr
 
     return cfg
 

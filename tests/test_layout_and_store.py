@@ -227,10 +227,28 @@ class TestLayoutAndStore(unittest.IsolatedAsyncioTestCase):
             cfg["capsule_colors"]["gemini"] = "green"
             cfg["capsule_colors"]["mailbox"] = "red"
             cfg["control_center"] = {"side_ratio": 32, "dock_ratio": 26}
+            cfg["cloud"]["gcp_tpm_warn"] = 180000
+            cfg["cloud"]["gcp_rpm_alert"] = 15
             save_statusline_config(cfg, cfg_path)
 
             reloaded = load_statusline_config(cfg_path)
             self.assertEqual(reloaded["control_center"], {"side_ratio": 32, "dock_ratio": 26})
+            self.assertEqual(reloaded["cloud"]["gcp_tpm_warn"], 180000)
+            self.assertEqual(reloaded["cloud"]["gcp_rpm_alert"], 15)
+
+            # Invalid GCP thresholds (0, negative, bool, non-int) must be dropped cleanly
+            bad_cfg_path = Path(tmp) / "bad_gcp_thresholds.json"
+            bad_cfg = {
+                "cloud": {
+                    "gcp_tpm_warn": 0,
+                    "gcp_rpm_warn": -5,
+                    "gcp_tpm_alert": True,
+                    "gcp_rpm_alert": "20r",
+                }
+            }
+            cleaned = save_statusline_config(bad_cfg, bad_cfg_path)
+            for k in ("gcp_tpm_warn", "gcp_tpm_alert", "gcp_rpm_warn", "gcp_rpm_alert"):
+                self.assertNotIn(k, cleaned["cloud"])
 
             # Out-of-bounds or boolean ratios must fall back to safe defaults
             cfg["control_center"] = {"side_ratio": 99, "dock_ratio": True}

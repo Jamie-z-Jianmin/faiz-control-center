@@ -277,14 +277,20 @@ if [ "${FAIZ_STATUSLINE_NO_BG:-0}" != "1" ] && [ -x "$DASH_BIN" ]; then
         cloud_cooldown=30
     fi
     [ "$c_age" -gt "$cloud_cooldown" ] && [ "$c_last" -gt "$cloud_cooldown" ] && need_cloud=1
+    _has_gcp_adc=0
+    if [ "${AGY_ADC_AUTH:-0}" = "1" ] \
+        || [ -s "${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}" ]; then
+        _has_gcp_adc=1
+    fi
     if [ "$need_cloud" -eq 1 ] \
+        && [ "$_has_gcp_adc" -eq 0 ] \
         && [ ! -d "$HOME/.config/colab-cli" ] \
         && [ ! -e "$HOME/.gemini/antigravity-cli/bin/gdrive" ] \
         && [ ! -s "${RCLONE_CONFIG:-$HOME/.config/rclone/rclone.conf}" ] \
         && [ "${FAIZ_ENABLE_CLOUD:-0}" != "1" ]; then
         need_cloud=0
     fi
-    if [ "$need_cloud" -eq 1 ] && [ ! -d "$HOME/.config/colab-cli" ] && [ -s "$backoff_file" ]; then
+    if [ "$need_cloud" -eq 1 ] && [ "$_has_gcp_adc" -eq 0 ] && [ ! -d "$HOME/.config/colab-cli" ] && [ -s "$backoff_file" ]; then
         b_raw=$(< "$backoff_file")
         if [[ "$b_raw" =~ \"next_allowed_epoch\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -gt "$now_ts" ] 2>/dev/null; then
             need_cloud=0
@@ -354,9 +360,16 @@ fi
 
 jq_args=(-rn --arg in_raw "$stdin_payload" --argjson u_mt "$u_mt" --argjson c_mt "$c_mt" --argjson term_cols "$term_cols" --argjson has_tc "$has_tc" --argjson t_mtime "$t_mtime" --argjson sess_tok "$sess_tok" --arg t_path "$t_path")
 is_gcp_mode="false"
-[ "${AGY_ADC_AUTH:-0}" = "1" ] && is_gcp_mode="true"
-jq_args+=(--argjson is_gcp_mode "$is_gcp_mode" --arg gcp_env_proj "${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-${ANTHROPIC_VERTEX_PROJECT_ID:-}}}")
-jq_args+=(--argjson gcp_tpm_warn "${FAIZ_GCP_TPM_WARN:-250000}" --argjson gcp_tpm_alert "${FAIZ_GCP_TPM_ALERT:-500000}" --argjson gcp_rpm_warn "${FAIZ_GCP_RPM_WARN:-12}" --argjson gcp_rpm_alert "${FAIZ_GCP_RPM_ALERT:-20}")
+_v_tpm_w=null; _v_tpm_a=null; _v_rpm_w=null; _v_rpm_a=null
+if [ "${AGY_ADC_AUTH:-0}" = "1" ]; then
+    is_gcp_mode="true"
+    [[ "${FAIZ_GCP_TPM_WARN:-}" =~ ^[1-9][0-9]*$ ]] && _v_tpm_w="$FAIZ_GCP_TPM_WARN"
+    [[ "${FAIZ_GCP_TPM_ALERT:-}" =~ ^[1-9][0-9]*$ ]] && _v_tpm_a="$FAIZ_GCP_TPM_ALERT"
+    [[ "${FAIZ_GCP_RPM_WARN:-}" =~ ^[1-9][0-9]*$ ]] && _v_rpm_w="$FAIZ_GCP_RPM_WARN"
+    [[ "${FAIZ_GCP_RPM_ALERT:-}" =~ ^[1-9][0-9]*$ ]] && _v_rpm_a="$FAIZ_GCP_RPM_ALERT"
+fi
+jq_args+=(--argjson is_gcp_mode "$is_gcp_mode" --arg gcp_env_proj "${FAIZ_GCP_PROJECT:-${GOOGLE_CLOUD_PROJECT:-${CLOUDSDK_CORE_PROJECT:-${ANTHROPIC_VERTEX_PROJECT_ID:-}}}}")
+jq_args+=(--argjson gcp_tpm_warn_env "$_v_tpm_w" --argjson gcp_tpm_alert_env "$_v_tpm_a" --argjson gcp_rpm_warn_env "$_v_rpm_w" --argjson gcp_rpm_alert_env "$_v_rpm_a")
 if [ -s "$USAGE_CACHE" ]; then
     jq_args+=(--rawfile u_raw "$USAGE_CACHE")
 else
@@ -508,7 +521,7 @@ else
 fi
 
 _re_maxw='"max_width"[[:space:]]*:[[:space:]]*[1-9]'
-if [ "${term_cols:-90}" -lt 157 ] 2>/dev/null || [[ "$cfg_raw" =~ $_re_maxw ]]; then
+if [ "${term_cols:-90}" -lt 190 ] 2>/dev/null || [[ "$cfg_raw" =~ $_re_maxw ]]; then
     JQ_MATRIX_PACK='
   def pair_quota_col4($items):
     if ($items | length) == 8 and ($items[3].cap_id == "gemini") and ($items[4].cap_id == "claude" or $items[4].cap_id == "gcp") then
@@ -563,8 +576,8 @@ if [ "${term_cols:-90}" -lt 157 ] 2>/dev/null || [[ "$cfg_raw" =~ $_re_maxw ]]; 
           .parts |= [
             .[] |
             if (.r == "lbl") and (.t == "Colab ") then .t = "Clb "
-            elif (.r == "acc") and (.t | startswith(" · GCE:")) then
-              (.t | sub("^ · GCE:"; " · G") | if $lvl >= 3 then sub("·Spot"; "") else . end) as $nt | .t = $nt
+            elif (.r == "acc") and ((.t | startswith(" · GCE:")) or (.t | startswith("GCE:"))) then
+              (.t | sub("GCE:"; "G") | if $lvl >= 3 then sub("·Spot"; "") else . end) as $nt | .t = $nt
             else . end
           ]
         elif .cap_id == "mailbox" and ((.parts | length) > 0) and (.parts[0].r == "lbl") then
@@ -963,10 +976,10 @@ JQ_FILTER="${JQ_DISP_LEN}${JQ_COL_HELPERS}"'
   (if $gcp_tpm_60 >= 1000000 then "\(($gcp_tpm_60 / 1000000) | fmt1)M" elif $gcp_tpm_60 >= 1000 then "\(($gcp_tpm_60 / 1000) | round)K" else "\($gcp_tpm_60)" end) as $gcp_tpm_txt |
   ([$gcp_env_proj, ($cfg_cloud.gcp_project // ""), (($u.channels | as_obj).quota_project // "")] | map(select(type == "string" and . != "" and . != "your-gcp-project")) | .[0] // "") as $gcp_proj |
   (if ($gcp_proj | length) > 14 then "\($gcp_proj[0:13])…" else $gcp_proj end) as $gcp_proj_short |
-  (($cfg_cloud.gcp_tpm_warn | if type == "number" and . > 0 then . else $gcp_tpm_warn end)) as $eff_tpm_warn |
-  (($cfg_cloud.gcp_tpm_alert | if type == "number" and . > 0 then . else $gcp_tpm_alert end)) as $eff_tpm_alert |
-  (($cfg_cloud.gcp_rpm_warn | if type == "number" and . > 0 then . else $gcp_rpm_warn end)) as $eff_rpm_warn |
-  (($cfg_cloud.gcp_rpm_alert | if type == "number" and . > 0 then . else $gcp_rpm_alert end)) as $eff_rpm_alert |
+  ($gcp_tpm_warn_env // ($cfg_cloud.gcp_tpm_warn | if type == "number" and . > 0 then . else null end) // 250000) as $eff_tpm_warn |
+  ($gcp_tpm_alert_env // ($cfg_cloud.gcp_tpm_alert | if type == "number" and . > 0 then . else null end) // 500000) as $eff_tpm_alert |
+  ($gcp_rpm_warn_env // ($cfg_cloud.gcp_rpm_warn | if type == "number" and . > 0 then . else null end) // 12) as $eff_rpm_warn |
+  ($gcp_rpm_alert_env // ($cfg_cloud.gcp_rpm_alert | if type == "number" and . > 0 then . else null end) // 20) as $eff_rpm_alert |
   (
     if ($gcp_tpm_60 >= $eff_tpm_alert) or ($gcp_rpm_60 >= $eff_rpm_alert) then ["▲", "alert", true]
     elif ($gcp_tpm_60 >= $eff_tpm_warn) or ($gcp_rpm_60 >= $eff_rpm_warn) then ["▲", "warn", true]
@@ -1055,17 +1068,21 @@ JQ_COMPACT='
     ) |
     (
       (if $m_sess and ($pc != null) then [{t: "\($pc)·\($gc // 0)", r: "val"}] else [] end) +
-      (if $m_colab and ($clb != "") and ($clb != "NOT_CONFIGURED") then
+      (if $m_colab and ((($clb != "") and ($clb != "NOT_CONFIGURED")) or (($gce // 0) > 0)) then
         (if ($m_sess and ($pc != null)) then [{t: "·", r: "lbl"}] else [] end) +
-        (if $clb == "ONLINE" then [{t: "Colab ", r: "lbl"}, {t: ((if $idle != null then "\(($idle / 60) | floor)m" else "ON" end) + (if $clb_cu_txt != "" then "·CU\($clb_cu_txt)" else "" end)), r: "val"}]
-         elif $clb == "STOPPED" then [{t: "Colab ", r: "lbl"}, {t: "OFF", r: "lbl"}]
-         elif $clb == "STALE_OFFLINE" then [{t: "Colab!", r: "acc"}]
-         elif $clb == "DEGRADED" then [{t: (if $err_kind == "rate_limit" then "Colab LIM" else "Colab ERR" end), r: "acc"}]
-         else [{t: "Colab \($clb)", r: "acc"}] end) +
-        (if ($gce // 0) > 0 then [{t: " G\($gce)\(if $gce_spot then "·S" else "" end)\(if $gce_up_txt != "" then "(\($gce_up_txt))" else "" end)", r: "acc"}] else [] end)
+        (if ($clb != "") and ($clb != "NOT_CONFIGURED") then
+          (if $clb == "ONLINE" then [{t: "Colab ", r: "lbl"}, {t: ((if $idle != null then "\(($idle / 60) | floor)m" else "ON" end) + (if $clb_cu_txt != "" then "·CU\($clb_cu_txt)" else "" end)), r: "val"}]
+           elif $clb == "STOPPED" then [{t: "Colab ", r: "lbl"}, {t: "OFF", r: "lbl"}]
+           elif $clb == "STALE_OFFLINE" then [{t: "Colab!", r: "acc"}]
+           elif $clb == "DEGRADED" then [{t: (if $err_kind == "rate_limit" then "Colab LIM" else "Colab ERR" end), r: "acc"}]
+           else [{t: "Colab \($clb)", r: "acc"}] end) +
+          (if ($gce // 0) > 0 then [{t: " G\($gce)\(if $gce_spot then "·S" else "" end)\(if $gce_up_txt != "" then "(\($gce_up_txt))" else "" end)", r: "acc"}] else [] end)
+         else
+          [{t: "GCE:\($gce)\(if $gce_spot then "·S" else "" end)\(if $gce_up_txt != "" then "(\($gce_up_txt))" else "" end)", r: "acc"}]
+         end)
        else [] end) +
       (if $m_mbox and ($mt != null) and ($clb != "NOT_CONFIGURED") then
-        (if (($m_sess and ($pc != null)) or ($m_colab and ($clb != "") and ($clb != "NOT_CONFIGURED"))) then [{t: "·", r: "lbl"}] else [] end) +
+        (if (($m_sess and ($pc != null)) or ($m_colab and ((($clb != "") and ($clb != "NOT_CONFIGURED")) or (($gce // 0) > 0)))) then [{t: "·", r: "lbl"}] else [] end) +
         (if $m_stale and ($mt == 0) and ($mf == 0) and ($md == 0) then [{t: "Q!", r: "acc"}]
          elif ($mf // 0) > 0 or $mu > 0 then [{t: "Q\($mt) ", r: "lbl"}, {t: "\(if ($mf // 0) > 0 then "\($mf)F" else "" end)\(if $mu > 0 then "\($mu)U" else "" end)", r: "acc"}]
          else [{t: "Q", r: "lbl"}, {t: "\($mt)", r: "val"}] end)
@@ -1321,27 +1338,37 @@ JQ_MAIN='
     else . end
   else . end |
 
-  if $m_colab and ($clb != "") and ($clb != "NOT_CONFIGURED") then
-    (
-      if $clb == "ONLINE" then
-        ["●", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then ($L.online + (if $idle != null then "\($L.mleft_p)\(($idle / 60) | floor)\($L.mleft_s)" else "" end) + (if $clb_cu_txt != "" then " · CU:\($clb_cu_txt)" else "" end)) else ($L.on + (if $idle != null then "(\(($idle / 60) | floor)m)" else "" end)) end), r: "val"}], "ok", false]
-      elif $clb == "STOPPED" then
-        ["○", [{t: "Colab ", r: "lbl"}, {t: $L.idle, r: "lbl"}], "muted", false]
-      elif $clb == "STALE_OFFLINE" then
-        ["▲", [{t: "Colab ", r: "lbl"}, {t: $L.stale, r: "acc"}], "alert", true]
-      elif $clb == "DEGRADED" then
-        (if $err_kind == "rate_limit" then
-          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then $L.lim_rate else $L.lim end), r: "acc"}], "warn", true]
-         else
-          ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then $L.to_net else $L.to end), r: "acc"}], "warn", true]
-         end)
-      else
-        ["◐", [{t: "Colab ", r: "lbl"}, {t: $clb, r: "acc"}], "warn", true]
-      end
-    ) as $cm |
-    (if ($gce // 0) > 0 then [{t: " · GCE:\($gce)\($L.gce_s)\(if $gce_spot then "·Spot" else "" end)\(if $gce_up_txt != "" then "(\($gce_up_txt))" else "" end)", r: "acc"}] else [] end) as $gce_p |
-    (if ($gce // 0) > 0 then "alert" else $cm[2] end) as $c_slot |
-    . + [{cap_id: "colab", icon: $cm[0], parts: ($cm[1] + $gce_p), slot: $c_slot, tint: ($cm[3] or (($gce // 0) > 0))}]
+  if $m_colab and ((($clb != "") and ($clb != "NOT_CONFIGURED")) or (($gce // 0) > 0)) then
+    if ($clb != "") and ($clb != "NOT_CONFIGURED") then
+      (
+        if $clb == "ONLINE" then
+          ["●", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then ($L.online + (if $idle != null then "\($L.mleft_p)\(($idle / 60) | floor)\($L.mleft_s)" else "" end) + (if $clb_cu_txt != "" then " · CU:\($clb_cu_txt)" else "" end)) else ($L.on + (if $idle != null then "(\(($idle / 60) | floor)m)" else "" end)) end), r: "val"}], "ok", false]
+        elif $clb == "STOPPED" then
+          ["○", [{t: "Colab ", r: "lbl"}, {t: $L.idle, r: "lbl"}], "muted", false]
+        elif $clb == "STALE_OFFLINE" then
+          ["▲", [{t: "Colab ", r: "lbl"}, {t: $L.stale, r: "acc"}], "alert", true]
+        elif $clb == "DEGRADED" then
+          (if $err_kind == "rate_limit" then
+            ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then $L.lim_rate else $L.lim end), r: "acc"}], "warn", true]
+           else
+            ["▲", [{t: "Colab ", r: "lbl"}, {t: (if $wide_rich then $L.to_net else $L.to end), r: "acc"}], "warn", true]
+           end)
+        else
+          ["◐", [{t: "Colab ", r: "lbl"}, {t: $clb, r: "acc"}], "warn", true]
+        end
+      ) as $cm |
+      (if ($gce // 0) > 0 then [{t: " · GCE:\($gce)\($L.gce_s)\(if $gce_spot then "·Spot" else "" end)\(if $gce_up_txt != "" then "(\($gce_up_txt))" else "" end)", r: "acc"}] else [] end) as $gce_p |
+      (if ($gce // 0) > 0 then "alert" else $cm[2] end) as $c_slot |
+      . + [{cap_id: "colab", icon: $cm[0], parts: ($cm[1] + $gce_p), slot: $c_slot, tint: ($cm[3] or (($gce // 0) > 0))}]
+    else
+      . + [{
+        cap_id: "colab",
+        icon: "▲",
+        parts: [{t: "GCE:\($gce)\($L.gce_s)\(if $gce_spot then "·Spot" else "" end)\(if $gce_up_txt != "" then "(\($gce_up_txt))" else "" end)", r: "acc"}],
+        slot: "alert",
+        tint: true
+      }]
+    end
   else . end |
 
   if $m_mbox and ($mt != null) and ($clb != "NOT_CONFIGURED") then

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import time
 from typing import Any, Optional
 import urllib.error
@@ -233,7 +234,7 @@ class CloudProbe:
         proj = (self.gcp_project or "").strip()
         if proj and proj != "your-gcp-project":
             return proj
-        for env_key in ("GOOGLE_CLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT"):
+        for env_key in ("GOOGLE_CLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT", "ANTHROPIC_VERTEX_PROJECT_ID"):
             val = os.environ.get(env_key, "").strip()
             if val and val != "your-gcp-project":
                 return val
@@ -242,6 +243,24 @@ class CloudProbe:
             if qp and qp != "your-gcp-project":
                 return qp
         return ""
+
+    def _read_adc_data(self) -> Optional[dict[str, Any]]:
+        adc_file = self._resolve_adc_path()
+        if not adc_file.is_file():
+            return None
+        try:
+            raw_adc = json.loads(adc_file.read_text(encoding="utf-8"))
+            return raw_adc if isinstance(raw_adc, dict) else None
+        except Exception:
+            return None
+
+    def _is_gce_configured(self) -> bool:
+        adc_data = self._read_adc_data()
+        project = self._resolve_gcp_project(adc_data)
+        if not project:
+            return False
+        has_gcloud = bool(self.gcloud_bin and shutil.which(self.gcloud_bin))
+        return (adc_data is not None and adc_data.get("type") == "authorized_user") or has_gcloud
 
     def _read_or_refresh_adc_token(
         self,
@@ -494,8 +513,9 @@ class CloudProbe:
         drive_backend = "gdrive" if "gdrive" in raw_backend else "rclone"
         drive_configured = caps.get("configured") is not False
         colab_configured = self.colab_gateway is not None and self.colab_gateway.is_configured()
+        gce_configured = self._is_gce_configured()
 
-        if not drive_configured and not colab_configured:
+        if not drive_configured and not colab_configured and not gce_configured:
             self._in_backoff_skip = True
             return ColabGcpSnapshot(
                 fetched_at=now_iso,
@@ -508,7 +528,7 @@ class CloudProbe:
             )
 
         drive_in_backoff = (not force) and (now_ep < self._next_allowed_epoch)
-        if not colab_configured and drive_in_backoff:
+        if drive_configured and not colab_configured and drive_in_backoff:
             self._in_backoff_skip = True
             if self._last_snapshot is not None:
                 return ColabGcpSnapshot(
@@ -698,6 +718,24 @@ class CloudProbe:
                 stale=False,
             )
             self._last_snapshot = snap
+            return snap
+
+        # Pure GCP + GCE mode (no Drive, no Colab control plane)
+        if not drive_configured and not colab_configured:
+            snap = ColabGcpSnapshot(
+                fetched_at=now_iso,
+                colab_state="NOT_CONFIGURED",
+                project=self._resolve_gcp_project(self._read_adc_data()) or "",
+                gce_instances=gce_instances,
+                rclone_readonly=bool(caps.get("readonly", False)),
+                rclone_shared_client_id=bool(caps.get("shared_client_id", False)),
+                drive_backend=drive_backend,
+                colab_source="drive",
+                error="; ".join(errors) if errors else None,
+                stale=bool(gce_err),
+            )
+            if not gce_err:
+                self._last_snapshot = snap
             return snap
 
         # Legacy Drive-only fallback path (control plane unavailable or unconfigured)

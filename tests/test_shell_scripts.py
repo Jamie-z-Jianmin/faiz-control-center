@@ -1977,6 +1977,244 @@ esac
             self.assertIn("GCP 0 · 0r", plain)
             self.assertNotIn("Claude", plain)
 
+    def test_statusline_gcp_threshold_env_validation_and_precedence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            t_file = root / "transcript.jsonl"
+            ts_recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10))
+            t_file.write_text(
+                json.dumps({
+                    "step_index": 1,
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "created_at": ts_recent,
+                    "input_tokens": 50000,
+                    "cache_read_tokens": 0,
+                    "output_tokens": 500,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            cfg_file = fake_home / ".agents" / "statusline_config.json"
+            # Config sets high warn (900000), so 50.5K TPM is normally base (●)
+            cfg_file.write_text(
+                json.dumps({
+                    "density": "auto",
+                    "cloud": {"gcp_project": "cfg-proj", "gcp_tpm_warn": 900000, "gcp_rpm_warn": 100},
+                }),
+                encoding="utf-8",
+            )
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({"pro_5h_pct": 90.0, "pro_wk_pct": 90.0, "pty_fetched_epoch": int(now - 5)}),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps({"colab_state": "NOT_CONFIGURED"}),
+                encoding="utf-8",
+            )
+            base_env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "AGY_ADC_AUTH": "1",
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_STATUSLINE_CONFIG": str(cfg_file),
+                "FAIZ_TRANSCRIPT_PATH": str(t_file),
+                "FAIZ_TERM_WIDTH": "160",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            payload = b'{"context_window":{"used_percentage":20}}'
+
+            # 1. Invalid/non-numeric & zero env vars must NOT crash jq and must keep base icon (●)
+            bad_env = {
+                **base_env,
+                "FAIZ_GCP_TPM_WARN": "250k",
+                "FAIZ_GCP_TPM_ALERT": "bad",
+                "FAIZ_GCP_RPM_WARN": "0",
+                "FAIZ_GCP_RPM_ALERT": "-5",
+            }
+            res_bad = subprocess.run([str(STATUSLINE_SH)], input=payload, env=bad_env, capture_output=True, check=True)
+            plain_bad = re.sub(r"\x1b\[[0-9;]*m", "", res_bad.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("● GCP cfg-proj · 51K TPM · 1 RPM", plain_bad)
+
+            # 2. Valid env var overrides config threshold + FAIZ_GCP_PROJECT overrides config project
+            ov_env = {
+                **base_env,
+                "FAIZ_GCP_PROJECT": "env-proj",
+                "FAIZ_GCP_TPM_WARN": "40000",
+            }
+            res_ov = subprocess.run([str(STATUSLINE_SH)], input=payload, env=ov_env, capture_output=True, check=True)
+            plain_ov = re.sub(r"\x1b\[[0-9;]*m", "", res_ov.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("▲ GCP env-proj · 51K TPM · 1 RPM", plain_ov)
+
+    def test_statusline_ultrawide_colab_cu_gce_gcp_stays_2x4(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            now = time.time()
+            t_file = root / "transcript.jsonl"
+            ts_recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10))
+            t_file.write_text(
+                json.dumps({
+                    "step_index": 1,
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "created_at": ts_recent,
+                    "input_tokens": 120000,
+                    "cache_read_tokens": 3000,
+                    "output_tokens": 500,
+                }) + "\n",
+                encoding="utf-8",
+            )
+            cfg_file = fake_home / ".agents" / "statusline_config.json"
+            cfg_file.write_text(
+                json.dumps({"density": "auto", "cloud": {"gcp_project": "faiz-gpu-engine"}}),
+                encoding="utf-8",
+            )
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({
+                    "pro_5h_pct": 57.42,
+                    "pro_wk_pct": 87.55,
+                    "pro_5h_reset_at_epoch": int(now + 3 * 3600 + 32 * 60),
+                    "pro_count": 2,
+                    "gcp_count": 1,
+                    "pty_fetched_epoch": int(now - 5),
+                }),
+                encoding="utf-8",
+            )
+            (cache_dir / "cloud_snapshot.json").write_text(
+                json.dumps({
+                    "colab_state": "ONLINE",
+                    "idle_remaining_seconds": 2700,
+                    "colab_balance_cu": 484.25,
+                    "gce_running_count": 1,
+                    "gce_instances": [{
+                        "name": "spot-1",
+                        "zone": "us-central1-a",
+                        "status": "RUNNING",
+                        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 7200)),
+                        "provisioning_model": "SPOT",
+                    }],
+                    "mailbox_tasks_count": 2,
+                    "mailbox_failed_count": 1,
+                    "mailbox_done_count": 19,
+                }),
+                encoding="utf-8",
+            )
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "AGY_ADC_AUTH": "1",
+                "FAIZ_STATUSLINE_NO_BG": "1",
+                "FAIZ_STATUSLINE_CONFIG": str(cfg_file),
+                "FAIZ_TRANSCRIPT_PATH": str(t_file),
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            payload = b'{"context_window":{"used_percentage":45}}'
+            for w in ("160", "168", "174"):
+                res = subprocess.run([str(STATUSLINE_SH)], input=payload, env={**env, "FAIZ_TERM_WIDTH": w}, capture_output=True, check=True)
+                plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
+                lines = plain.splitlines()
+                self.assertEqual(len(lines), 4, msg=f"width={w} dropped out of 2x4:\n{plain}")
+
+    def test_statusline_pure_gcp_gce_spot_renders_and_polls_without_colab(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            cache_dir = fake_home / ".agents" / "cache"
+            cache_dir.mkdir(parents=True)
+            gcloud_dir = fake_home / ".config" / "gcloud"
+            gcloud_dir.mkdir(parents=True)
+            (gcloud_dir / "application_default_credentials.json").write_text('{"type":"authorized_user"}', encoding="utf-8")
+            now = time.time()
+            (cache_dir / "usage_snapshot.json").write_text(
+                json.dumps({"pro_5h_pct": 90.0, "pro_wk_pct": 90.0, "pty_fetched_epoch": int(now)}),
+                encoding="utf-8",
+            )
+            (cache_dir / ".bg_pty_ts").write_text("", encoding="utf-8")
+            c_file = cache_dir / "cloud_snapshot.json"
+            c_file.write_text(
+                json.dumps({
+                    "colab_state": "NOT_CONFIGURED",
+                    "gce_running_count": 1,
+                    "gce_instances": [{
+                        "name": "spot-1",
+                        "zone": "us-central1-a",
+                        "status": "RUNNING",
+                        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 7200)),
+                        "provisioning_model": "SPOT",
+                    }],
+                }),
+                encoding="utf-8",
+            )
+            os.utime(c_file, (now - 40, now - 40))
+
+            marker = root / "cloud_calls.log"
+            fake_dash = root / "fake-dash"
+            fake_dash.write_text(f"#!/usr/bin/env bash\necho \"$@\" >> {str(marker)!r}\n", encoding="utf-8")
+            fake_dash.chmod(0o755)
+            env = {
+                **os.environ,
+                "HOME": str(fake_home),
+                "AGY_ADC_AUTH": "1",
+                "FAIZ_DASH_BIN": str(fake_dash),
+                "FAIZ_TRANSCRIPT_PATH": "",
+                "FAIZ_TERM_WIDTH": "160",
+                "TERM": "xterm-kitty",
+                "COLORTERM": "truecolor",
+            }
+            env.pop("FAIZ_STATUSLINE_NO_BG", None)
+            res = subprocess.run([str(STATUSLINE_SH)], input=b'{"context_window":{"used_percentage":15}}', env=env, capture_output=True, check=True)
+            plain = re.sub(r"\x1b\[[0-9;]*m", "", res.stdout.decode("utf-8", errors="replace"))
+            self.assertIn("▲ GCE:1·Spot(2h00m)", plain)
+            deadline = time.monotonic() + 1.5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists())
+
+    def test_hook_reads_dock_ratio_and_silent_interactive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_home = root / "home"
+            (fake_home / ".agents" / "cache").mkdir(parents=True)
+            cfg_file = fake_home / ".agents" / "statusline_config.json"
+            cfg_file.write_text(json.dumps({"control_center": {"dock_ratio": 30}}), encoding="utf-8")
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            rex_log = root / "rex_calls.log"
+            fake_rex = fake_bin / "rex"
+            fake_rex.write_text(
+                f"""#!/usr/bin/env bash
+echo "$@" >> {str(rex_log)!r}
+case "$1" in
+  whoami) echo '{{"window_id":"win-1"}}' ;;
+  block) echo '{{"blocks":[]}}' ;;
+esac
+""",
+                encoding="utf-8",
+            )
+            fake_rex.chmod(0o755)
+
+            self._run_hook_in_pty([], {"HOME": str(fake_home), "REX_BLOCK_ID": "block:123"}, fake_bin)
+            self.assertTrue(rex_log.exists())
+            self.assertIn("--ratio 30", rex_log.read_text(encoding="utf-8"))
+
+            # Interactive bash -ic sourcing must emit zero job-control brackets
+            res_i = subprocess.run(
+                ["bash", "-ic", f"source {str(HOOK_SH)!r}; _maybe_launch_faiz_dash; sleep 0.1"],
+                env={**os.environ, "HOME": str(fake_home), "REX_BLOCK_ID": "block:123", "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res_i.returncode, 0)
+            self.assertNotIn("[1]", res_i.stdout + res_i.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

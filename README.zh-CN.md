@@ -21,8 +21,8 @@
   - **会话内气泡式诊断（`/faiz-dash` / `faiz-dash inspect`）**：不占用终端列宽，输出配额分组与重置倒计时、**配额燃烧步速与耗尽预测（`Pace / Forecast`）**、24 小时各模型 Token Burn、Cloud/Drive 退避与 `colab_source` / `colab_gpu` / `drive_backend` 遥测、Mailbox 队列核验与只读 APM 遥测摘要。
   - **一键环境体检（`faiz-dash doctor`）**：检测 Python 运行时、依赖包、`bash`/`jq`、TrueColor 支持、Nerd Font 胶囊字形（` ● `）、`statusline.sh` 权限、`agy settings.json` 接线与缓存健康度（支持 `--markdown` 隐私脱敏输出与 `--json`）。
   - **Rex 按需右侧边栏（`faiz-dash side`）**：在 Rex 内一键开关右侧 28% 宽度实时看板（`--focus=false` 不抢焦点，并在 `QuotaPanel` 内显示精简 `Pace:` 提示；按 `q` 或再次执行 `faiz-dash side` 关闭），默认关闭启动自动 Dock（`faiz-dash off`）。
-- **中英双语设置工作室（`faiz-dash config`）**：交互式配置 8 个信息模块、5 种视觉风格（`capsule` / `powerline` / `pill` / `ghost` / `minimal`）、5 套主题配色（`google` / `nord` / `tokyo_night` / `catppuccin` / `custom`）、**按胶囊独立覆盖配色（`capsule_colors` / `--capsule-color`，其中 `argon` 自动向后兼容映射至 `claude`）**、行统一配色（`row_colors`）、`ring`/`bar` 指示器、配额精度（`exact` 2 位 / `1dp` / `int`）、启动开关及 Rex 分屏比例；预览区支持按 `p` 切换独立测试场景（实时 / 正常 / 告警 / 新话，隔离沙箱不污染真实缓存）与按 `w` 切换目标列宽（自动 / `58c` / `91c` / `168c`）。
-- **双平面云算力与异步队列扩展**：将 `google-colab-cli`（`colab --auth=adc`）控制平面（实时会话、GPU 型号、算力单元余额）与 Drive 数据平面解耦，支持 `gdrive` CLI 与 `rclone` 双后端自动优选（`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`），并集成 GCE Spot 实例监控、Drive 水位（含持久指数退避）与产物防假完成核验。
+- **中英双语设置工作室（`faiz-dash config`）**：交互式配置 8 个信息模块、5 种视觉风格（`capsule` / `powerline` / `pill` / `ghost` / `minimal`）、5 套主题配色（`google` / `nord` / `tokyo_night` / `catppuccin` / `custom`）、**按胶囊独立覆盖配色（`capsule_colors` / `--capsule-color`，独立支持 `claude` 与 `gcp`）**、行统一配色（`row_colors`）、`ring`/`bar` 指示器、配额精度（`exact` 2 位 / `1dp` / `int`）、启动开关及 Rex 分屏比例；预览区支持按 `p` 切换独立测试场景（实时 / 正常 / 告警 / 新话，隔离沙箱不污染真实缓存）与按 `w` 切换目标列宽（自动 / `58c` / `91c` / `168c`）。
+- **双平面云算力、GCP 60s 速率与异步队列扩展**：将 `google-colab-cli`（`colab --auth=adc`）控制平面（实时会话、GPU 型号、`CU:` 算力单元余额）与 Drive 数据平面解耦，支持 `gdrive` CLI 与 `rclone` 双后端自动优选（`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`）；集成 Compute Engine REST API 直连与 GCE Spot 运行时长监控（`Spot(2h00m)`）、**GCP ADC 60 秒 TPM/RPM 速率监控**（`AGY_ADC_AUTH=1` 时自动替换 Claude 配额胶囊为 `GCP <proj> · <TPM> TPM · <RPM> RPM`，支持 `FAIZ_GCP_TPM_*` / `FAIZ_GCP_RPM_*` 阈值）、Drive 水位（含持久指数退避）与产物防假完成核验。
 
 ---
 
@@ -135,10 +135,11 @@ faiz-dash config          # 打开支持多场景 (p) 与多宽度 (w) 实时预
 
 ## 配置与可选云端扩展
 
-所有配置保存在 `~/.agents/statusline_config.json`（纯本地模式零配置即可开箱使用）。若你有 Colab / Drive (`gdrive` CLI / `rclone`) / GCE Spot 监控需求：
-1. **控制平面（`google-colab-cli`）**：完成 `colab --auth=adc` 授权（存在 ADC 或 `~/.config/colab-cli`）后，即可独立于 Drive 限流实时采集活跃会话数、GPU 型号（`colab_gpu`）、算力单元余额及来源标记 `colab_source`（`colab_cli` 或 `drive` 回退）。
-2. **数据平面（`gdrive` CLI / `rclone`）**：配置 `gdrive` CLI（`FAIZ_DRIVE_BACKEND=auto` 下自动优先）或在 `~/.config/rclone/rclone.conf` 中配置目标 remote（默认 `gdrive`），并在遥测中透出当前生效的 `drive_backend`（`gdrive` 或 `rclone`）。
-3. 通过 `~/.agents/statusline_config.json` 的 `"cloud"` 字段或环境变量（`FAIZ_GCP_PROJECT`、`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`、`FAIZ_RCLONE_REMOTE`、`FAIZ_COLAB_STATUS_PATH`、`FAIZ_MAILBOX_ROOT`、`FAIZ_PROJECTS_ROOT`）覆盖路径与后端；未配置 `colab` CLI、`gdrive` CLI 与 `rclone.conf` 时系统保持 `NOT_CONFIGURED` 零告警降级。
+所有配置保存在 `~/.agents/statusline_config.json`（纯本地模式零配置即可开箱使用）。若你有 GCP Vertex AI（`AGY_ADC_AUTH=1`）或 Colab / Drive (`gdrive` CLI / `rclone`) / GCE Spot 监控需求：
+1. **GCP 60s TPM/RPM 与 GCE REST 直连（`AGY_ADC_AUTH=1`）**：开启 `AGY_ADC_AUTH=1` 后，`statusline.sh` 会自动将第 2 颗配额胶囊替换为基于 `transcript.jsonl` 实时计算的 `GCP <项目> · <TPM> TPM · <RPM> RPM`，`CloudProbe` 亦通过 ADC 直连 Compute Engine REST API 展示 `GCE:<n>·Spot(<时长>)`（即使未配置 Colab/Drive 也可独立告警）。可通过环境变量 `FAIZ_GCP_TPM_WARN`（`250000`）、`FAIZ_GCP_TPM_ALERT`（`500000`）、`FAIZ_GCP_RPM_WARN`（`12`）、`FAIZ_GCP_RPM_ALERT`（`20`）或 `statusline_config.json` `.cloud` 覆写阈值。
+2. **控制平面（`google-colab-cli`）**：完成 `colab --auth=adc` 授权（存在 ADC 或 `~/.config/colab-cli`）后，即可独立于 Drive 限流实时采集活跃会话数、GPU 型号（`colab_gpu`）、`CU:` 算力单元余额（`colab_balance_cu` / `colab_usage_rate`）及来源标记 `colab_source`（`colab_cli` 或 `drive` 回退）。
+3. **数据平面（`gdrive` CLI / `rclone`）**：配置 `gdrive` CLI（`FAIZ_DRIVE_BACKEND=auto` 下自动优先）或在 `~/.config/rclone/rclone.conf` 中配置目标 remote（默认 `gdrive`），并在遥测中透出当前生效的 `drive_backend`（`gdrive` 或 `rclone`）。
+4. 通过 `~/.agents/statusline_config.json` 的 `"cloud"` 字段或环境变量（`FAIZ_GCP_PROJECT`、`FAIZ_DRIVE_BACKEND=auto|gdrive|rclone`、`FAIZ_RCLONE_REMOTE`、`FAIZ_COLAB_STATUS_PATH`、`FAIZ_MAILBOX_ROOT`、`FAIZ_PROJECTS_ROOT`）覆盖路径与后端；未配置 GCP ADC、`colab` CLI、`gdrive` CLI 与 `rclone.conf` 时系统保持 `NOT_CONFIGURED` 零告警降级。
 
 ---
 
@@ -148,4 +149,4 @@ faiz-dash config          # 打开支持多场景 (p) 与多宽度 (w) 实时预
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 57 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。
+[GitHub Actions CI](.github/workflows/ci.yml) 在 Ubuntu 与 macOS 上自动校验 Shell 语法、`styles.tcss` 打包完整性以及全部 72 项单元与 Textual Pilot 集成测试。采用 [MIT License](LICENSE) 开源。

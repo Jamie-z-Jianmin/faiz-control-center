@@ -40,8 +40,17 @@ _faiz_dash_spawn_if_needed() {
     if [ -n "$cur_win" ]; then
         has_dash=$(rex block list --json 2>/dev/null | "$jq_bin" -r --arg w "$cur_win" '[.blocks[]? | select(.window_id == $w and .label == "faiz-dash")] | length' 2>/dev/null)
         if [ "${has_dash:-0}" -eq 0 ]; then
+            local dock_ratio="22"
+            local cfg_file="${FAIZ_STATUSLINE_CONFIG:-$HOME/.agents/statusline_config.json}"
+            if [ -f "$cfg_file" ]; then
+                local raw_ratio
+                raw_ratio=$("$jq_bin" -r '.control_center.dock_ratio // empty' "$cfg_file" 2>/dev/null || true)
+                if [[ "$raw_ratio" =~ ^[0-9]+$ ]] && [ "$raw_ratio" -ge 12 ] && [ "$raw_ratio" -le 40 ]; then
+                    dock_ratio="$raw_ratio"
+                fi
+            fi
             local dash_bin="${FAIZ_DASH_BIN:-$HOME/.local/bin/faiz-dash}"
-            rex split -b "$rex_blk" --split=below --ratio 22 --focus=false --label "faiz-dash" --shell=none -- "$dash_bin" --dock >/dev/null 2>&1
+            rex split -b "$rex_blk" --split=below --ratio "$dock_ratio" --focus=false --label "faiz-dash" --shell=none -- "$dash_bin" --dock >/dev/null 2>&1
         fi
     fi
 
@@ -72,5 +81,9 @@ _maybe_launch_faiz_dash() {
     done
 
     command -v rex >/dev/null 2>&1 || return 0
-    ( _faiz_dash_spawn_if_needed "$rex_blk" ) >/dev/null 2>&1 &
+    if [[ "$-" == *i* ]]; then
+        ( ( _faiz_dash_spawn_if_needed "$rex_blk" ) </dev/null >/dev/null 2>&1 & )
+    else
+        ( _faiz_dash_spawn_if_needed "$rex_blk" ) </dev/null >/dev/null 2>&1 &
+    fi
 }
